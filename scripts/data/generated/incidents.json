@@ -1,0 +1,53 @@
+[
+  {
+    "id": "incident--12345678-abcd-efgh-ijkl-123456789012",
+    "title": "테스트기관에 대한 외부 서비스 초기 접근 공격",
+    "timestamp": "2025-04-15T13:35:00Z",
+    "victim": {
+      "organization": "테스트기관",
+      "system": "테스트시스템",
+      "industry": "Public",
+      "country": "South Korea"
+    },
+    "attribution": {
+      "group_name": "HEXANE",
+      "confidence": "High"
+    },
+    "summary": "HEXANE 그룹이 테스트기관에 대한 OS 리소스 고갈 공격을 통해 초기 접근을 시도했습니다.",
+    "attack_flow": [
+      {
+        "step": 1,
+        "phase": "Initial Access",
+        "technique": "T1133 External Remote Services",
+        "description": "HEXANE 그룹은 테스트시스템에 대한 외부 원격 서비스를 탐지하여 접근을 시도했습니다.",
+        "outcome": "Success",
+        "related_entity": {
+          "type": "Indicator",
+          "value": "http://101.43.49.183/tcp_linux_amd64"
+        }
+      },
+      {
+        "step": 2,
+        "phase": "Defense Evasion",
+        "technique": "T1027.013 Encrypted/Encoded File",
+        "description": "공격자는 암호화된 파일 전송을 통해 방어 시스템을 회피했습니다.",
+        "outcome": "Success",
+        "related_entity": {
+          "type": "Malware",
+          "value": "MURKYTOP"
+        }
+      },
+      {
+        "step": 3,
+        "phase": "Impact",
+        "technique": "T1499.001 OS Exhaustion Flood",
+        "description": "OS 리소스 고갈 공격을 통해 시스템의 성능을 저하시켰습니다.",
+        "outcome": "Blocked",
+        "related_entity": {
+          "type": "Vulnerability",
+          "value": "CVE-2025-58360 (GeoServer)"
+        }
+      }
+    ]
+  }
+]

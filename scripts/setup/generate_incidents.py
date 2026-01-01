@@ -5,9 +5,10 @@ import random
 import time
 import re
 from typing import List, Dict, Any
+import argparse
 
 # 프로젝트 루트 경로 확보
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../")))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
@@ -19,11 +20,12 @@ from src.core.graph_client import graph_client
 # ==============================================================================
 # [설정] 경로 정의
 # ==============================================================================
-DATA_DIR = os.path.join(os.path.dirname(__file__), "../data/generated")
-SEED_DIR = os.path.join(os.path.dirname(__file__), "../data/seed")  # [New]
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
+DATA_DIR = os.path.join(BASE_DIR, "data/generated")
+SEED_DIR = os.path.join(BASE_DIR, "data/seed") 
 
 OUTPUT_FILE = os.path.join(DATA_DIR, "incidents.json")
-VICTIM_FILE = os.path.join(SEED_DIR, "victims.json")                # [New]
+VICTIM_FILE = os.path.join(SEED_DIR, "victims.json")
 
 # ==============================================================================
 # 0. Helpers
@@ -232,19 +234,40 @@ def save_incidents(new_incidents: List[Dict[str, Any]]):
 # Main Loop
 # ==============================================================================
 if __name__ == "__main__":
-    print("🚀 Incident Generator Started (Target Randomization Active)")
-    print(f"[*] Reading victims from: {VICTIM_FILE}")
-    print("Press Ctrl+C to stop.\n")
+    # 1. 인자 파서 설정
+    parser = argparse.ArgumentParser(description="Generate synthetic cyber incidents using LLM.")
+    parser.add_argument("--count", type=int, default=1, help="Number of incidents to generate")
+    args = parser.parse_args()
+    
+    LIMIT = args.count
+
+    print(f"🚀 Incident Generator Started")
+    print(f"[*] Target Count: {LIMIT}")
+    # VICTIM_FILE 변수가 상단에 정의되어 있다고 가정
+    if 'VICTIM_FILE' in globals():
+        print(f"[*] Reading victims from: {VICTIM_FILE}")
     
     try:
-        while True:
+        for i in range(LIMIT):
+            print(f"\n[+] Generating scenario {i+1}/{LIMIT}...")
+            
+            # 1개씩 생성
             scenarios = generate_scenarios(1)
+            
             if scenarios:
                 save_incidents(scenarios)
+                print(f"   ✅ Saved scenario {i+1}.")
             
-            print("💤 Waiting 5s...")
-            time.sleep(5)
+            # 마지막 생성이 아니면 API 호출 제한을 고려해 잠시 대기
+            if i < LIMIT - 1:
+                print("💤 Waiting 2s for rate limit...")
+                time.sleep(2)
 
     except KeyboardInterrupt:
-        print("\n🛑 Stopped.")
+        print("\n🛑 Stopped by user.")
         sys.exit(0)
+    except Exception as e:
+        print(f"\n❌ Error occurred: {e}")
+        sys.exit(1)
+
+    print("\n🎉 Generation Complete.")

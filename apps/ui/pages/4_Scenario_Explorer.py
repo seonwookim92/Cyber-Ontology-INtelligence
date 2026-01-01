@@ -15,7 +15,7 @@ st.set_page_config(page_title="Scenario Explorer", page_icon="🕸️", layout="
 # ==============================================================================
 NODE_STYLES = {
     "Incident": {
-        "color": "#FF2B2B", "shape": "hexagon", "size": 18,
+        "color": "#FFD900", "shape": "hexagon", "size": 18,
         "font": {"color": "white", "face": "sans-serif", "background": "#440000"}
     },
     "Victim": {
@@ -23,7 +23,7 @@ NODE_STYLES = {
         "font": {"color": "white", "background": "#002B55"}
     },
     "Actor": {
-        "color": "#1A1A1A", "shape": "star", "size": 14,
+        "color": "#FB0000", "shape": "star", "size": 14,
         "font": {"color": "white", "background": "#000000"}
     },
     "Malware": {
@@ -82,7 +82,7 @@ def add_node_to_state(node_id, label, type_key, title="", custom_color=None):
             title=title,
             shape=style.get("shape", "dot"),
             color=style.get("color", "#999"),
-            size=style.get("size", 20),
+            size=style.get("size", 13),
             font=style.get("font", {"color": "white", "background": "#333"})
         )
         st.session_state.store_nodes.append(n)
@@ -389,7 +389,7 @@ with col2:
         st.caption("🦠 Malware / ⚠️ CVE / 🟩 IoC")
 
     with tab2:
-        st.markdown(f"### ⚡ Timeline: {incidents[0]['title'][:10]}...")
+        st.markdown(f"### ⚡ Timeline: ")
         timeline = st.session_state.incident_timeline
         if not timeline:
             st.caption("Select the main incident node to see timeline.")
