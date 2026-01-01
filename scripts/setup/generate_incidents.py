@@ -145,7 +145,7 @@ def generate_scenarios(count: int = 1) -> List[Dict[str, Any]]:
       {{
         "id": "incident--uuid",
         "title": "Incident Title (Korean)",
-        "timestamp": "ISO8601 Date",
+        "timestamp": "ISO8601 Date distributed between 2023-2025",
         "victim": {{ 
             "organization": "{target_org}", 
             "system": "{target_sys}", 
