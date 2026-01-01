@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# venv
+.venv/
+venv/
+ENV/
+
+# Env files
+.env
+
+# Data (downloaded/generated)
+data/raw/
+data/processed/
+data/generated/
+
+# Data directories (Neo4j volumes)
+neo4j_data/
+neo4j_logs/
+plugins/
+
+# Logs
+*.log
+
+.DS_Store

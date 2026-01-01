@@ -1,0 +1,23 @@
+[theme]
+# 기본 다크 모드 활성화
+base = "dark"
+
+# [Cyber Security Theme Colors]
+# 메인 포인트 컬러 (버튼, 슬라이더 등) - 네온 민트
+primaryColor = "#00CC96" 
+
+# 배경색 - 아주 깊은 남색/검정
+backgroundColor = "#0E1117"
+
+# 사이드바 배경색 - 약간 밝은 톤
+secondaryBackgroundColor = "#262730"
+
+# 텍스트 색상
+textColor = "#FAFAFA"
+
+# 폰트 설정 (옵션: sans serif, serif, monospace)
+font = "sans serif"
+
+[server]
+# 파일 수정 시 자동 재실행 (개발 편의성)
+runOnSave = true
