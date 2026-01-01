@@ -3,9 +3,9 @@ import sys
 import os
 from typing import Any
 
-# 프로젝트 루트 경로 추가 (src 모듈 import용)
+# 프로젝트 루트 경로 추가
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(os.path.dirname(CURRENT_DIR))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(CURRENT_DIR))) # src 위 coin 폴더까지 올라감
 sys.path.append(PROJECT_ROOT)
 
 from mcp.server.fastmcp import FastMCP
@@ -20,108 +20,129 @@ mcp = FastMCP("Cyber Ontology Graph")
 # ==============================================================================
 
 @mcp.tool()
-def get_schema() -> str:
+def get_graph_schema() -> str:
     """
-    Get the graph schema (Node Labels, Relationship Types, and Indexes).
-    Use this to understand the database structure.
+    Get the current graph schema definition.
+    Essential for understanding how Incidents, Attack Steps, and Entities are connected.
     """
+    return """
+    [Graph Schema Definition]
+    
+    1. **Core Nodes**:
+       - `(:Incident)`: Represents a security report or event (e.g., 'React2Shell Attack').
+         - Properties: title, summary, timestamp
+       - `(:AttackStep)`: Represents a specific phase in the attack lifecycle (e.g., 'Initial Access').
+         - Properties: phase, description, step_num
+       - `(:Entity)`: Represents an IoC or artifact (e.g., IP, Hash, CVE).
+         - Properties: value, type (IP, Hash, Vulnerability, etc.), normalized_value
+         
+    2. **Relationships**:
+       - `(:Incident)-[:HAS_ATTACK_FLOW]->(:AttackStep)`
+       - `(:AttackStep)-[:INVOLVES_ENTITY]->(:Entity)`
+    
+    3. **Legacy/MITRE Nodes** (If exist):
+       - `(:ThreatGroup)`, `(:Malware)`, `(:AttackTechnique)`
+    """
+
+@mcp.tool()
+def search_keyword_context(keyword: str) -> str:
+    """
+    Search for a keyword (CVE, IP, Malware Name) and return its FULL CONTEXT.
+    This tool finds which Incident it belongs to and at what Attack Step it was observed.
+    
+    Use this when user asks: "Tell me about CVE-2025-55182" or "What happened with IP x.x.x.x?"
+    """
+    # Cypher 쿼리: Entity -> Step -> Incident 역추적
+    query = """
+    // 1. 키워드 매칭 (이름, 값, 원본값)
+    MATCH (e:Entity)
+    WHERE toLower(e.value) CONTAINS toLower($kw) 
+       OR toLower(e.normalized_value) CONTAINS toLower($kw)
+       OR toLower(e.type) CONTAINS toLower($kw)
+    
+    // 2. 맥락(Context) 추적
+    MATCH path = (i:Incident)-[:HAS_ATTACK_FLOW]->(s:AttackStep)-[:INVOLVES_ENTITY]->(e)
+    
+    // 3. (옵션) 같은 단계의 다른 연관 엔티티도 함께 조회
+    OPTIONAL MATCH (s)-[:INVOLVES_ENTITY]->(peer:Entity)
+    WHERE peer <> e
+    
+    RETURN 
+        i.title as Incident,
+        i.summary as Summary,
+        s.phase as Phase,
+        s.description as StepDescription,
+        e.value as FoundEntity,
+        e.type as EntityType,
+        collect(distinct peer.value) as RelatedContextArtifacts
+    LIMIT 5
+    """
+    
     try:
-        q_labels = "CALL db.labels() YIELD label RETURN collect(label) as labels"
-        labels = graph_client.query(q_labels)[0]['labels']
+        results = graph_client.query(query, {"kw": keyword})
         
-        q_rels = "CALL db.relationshipTypes() YIELD relationshipType RETURN collect(relationshipType) as rels"
-        rels = graph_client.query(q_rels)[0]['rels']
+        if not results:
+            return f"No direct context found for '{keyword}'. It might not be in the graph yet."
+            
+        # LLM이 이해하기 쉬운 텍스트로 변환
+        summary_lines = []
+        for r in results:
+            summary = (
+                f"=== Found in Incident: '{r['Incident']}' ===\n"
+                f"- Incident Summary: {r['Summary']}\n"
+                f"- Attack Phase: {r['Phase']}\n"
+                f"- Context: {r['StepDescription']}\n"
+                f"- Entity Details: {r['FoundEntity']} ({r['EntityType']})\n"
+                f"- Co-occurring Artifacts in this step: {', '.join(r['RelatedContextArtifacts'][:5])}\n"
+            )
+            summary_lines.append(summary)
+            
+        return "\n".join(summary_lines)
         
-        return f"""
-        [Graph Schema]
-        - Labels: {', '.join(labels)}
-        - Relationships: {', '.join(rels)}
-        - Core Entities: Vulnerability(cve_id), Malware(name), ThreatGroup(name), AttackTechnique(mitre_id), Indicator(url)
-        """
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Search Error: {str(e)}"
 
 @mcp.tool()
 def run_cypher_query(query: str) -> str:
     """
-    Execute a read-only Cypher query against Neo4j.
-    - Use MATCH, WHERE, RETURN.
-    - Use toLower() for case-insensitive comparison.
-    - Example: MATCH (n:Malware) WHERE toLower(n.name) CONTAINS 'mozi' RETURN n LIMIT 5
+    Execute a direct Cypher query. Use this ONLY if 'search_keyword_context' fails 
+    or if you need complex aggregations.
+    
+    Rules:
+    - READ ONLY (MATCH, RETURN only).
+    - Always use LIMIT.
+    - Labels to use: Incident, AttackStep, Entity.
     """
-    # 안전장치: 데이터 조작 방지
-    forbidden = ["CREATE", "DELETE", "DETACH", "SET", "MERGE", "DROP"]
+    forbidden = ["CREATE", "DELETE", "DETACH", "SET", "MERGE", "DROP", "REMOVE"]
     if any(cmd in query.upper() for cmd in forbidden):
-        return "Error: Only read-only queries (MATCH, RETURN) are allowed via MCP."
+        return "Error: Only read-only queries are allowed."
 
     try:
         results = graph_client.query(query)
         if not results:
             return "No results found."
-        # 결과가 너무 길면 잘라서 반환
         return json.dumps(results, ensure_ascii=False, default=str)[:4000]
     except Exception as e:
-        return f"Cypher Error: {str(e)}"
+        return f"Cypher Execution Error: {str(e)}"
 
 @mcp.tool()
-def search_threat_intelligence(keyword: str) -> str:
+def analyze_incident_correlations(entity_value: str) -> str:
     """
-    Fuzzy search for a keyword across MITRE (Groups, Malware, Techniques) and Indicators.
-    Useful when you don't know the exact name or ID.
+    Find if an entity (e.g., an IP or Hash) appears across MULTIPLE Incidents.
+    Useful for detecting campaigns or recurring threats.
     """
-    try:
-        # 1. MITRE Full-text Search
-        q_mitre = f"""
-        CALL db.index.fulltext.queryNodes("mitre_text_index", "{keyword}") YIELD node, score
-        RETURN labels(node)[0] as Type, node.name as Name, node.description as Desc, score
-        LIMIT 5
-        """
-        res_mitre = graph_client.query(q_mitre)
-
-        # 2. Indicator Search
-        q_ioc = f"""
-        MATCH (i:Indicator)
-        WHERE toLower(i.url) CONTAINS toLower("{keyword}") OR toLower(i.tags) CONTAINS toLower("{keyword}")
-        RETURN 'Indicator' as Type, i.url as Name, i.tags as Desc, 1.0 as score
-        LIMIT 5
-        """
-        res_ioc = graph_client.query(q_ioc)
-
-        return json.dumps({
-            "mitre_knowledge": res_mitre,
-            "indicators": res_ioc
-        }, ensure_ascii=False)
-    except Exception as e:
-        return f"Search Error: {str(e)}"
-
-@mcp.tool()
-def analyze_correlation(artifacts: str) -> str:
-    """
-    Analyze hidden connections between multiple artifacts (IPs, Names, IDs).
-    Input: Comma-separated string (e.g., "Mozi, CVE-2023-1234, T1059")
-    Returns: Common hub nodes connecting these artifacts.
-    """
-    values = [v.strip() for v in artifacts.split(',') if v.strip()]
-    if not values:
-        return "Error: No artifacts provided."
-
-    query = f"""
-    WITH {json.dumps(values)} AS inputs
-    MATCH (n) WHERE n.name IN inputs OR n.cve_id IN inputs OR n.product IN inputs OR n.url IN inputs
-    MATCH (n)-[r]-(hub)-[r2]-(other)
-    WHERE hub <> n AND other <> n
-    WITH hub, count(distinct n) as connected_count, collect(distinct n.name) as connected_sources
-    WHERE connected_count > 1
-    RETURN labels(hub)[0] as HubType, hub.name as HubName, connected_count, connected_sources
-    ORDER BY connected_count DESC
-    LIMIT 5
+    query = """
+    MATCH (e:Entity {value: $val})<-[:INVOLVES_ENTITY]-(s:AttackStep)<-[:HAS_ATTACK_FLOW]-(i:Incident)
+    RETURN i.title as Incident, i.timestamp as Time, s.phase as Phase
+    ORDER BY i.timestamp DESC
     """
     try:
-        results = graph_client.query(query)
+        results = graph_client.query(query, {"val": entity_value})
+        if not results:
+            return "This entity appears in only one incident (or none)."
         return json.dumps(results, ensure_ascii=False)
     except Exception as e:
-        return f"Correlation Error: {str(e)}"
+        return f"Error: {str(e)}"
 
 if __name__ == "__main__":
-    # MCP 서버 실행 (Stdio 방식)
     mcp.run()

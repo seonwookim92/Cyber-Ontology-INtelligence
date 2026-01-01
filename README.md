@@ -2,7 +2,7 @@
 
 **A Next-Gen Threat Intelligence Platform powered by Knowledge Graphs and Autonomous AI Agents.**
 
-This project structures fragmented cyber threat data (IOCs, TTPs, CVEs) into a machine-readable **Knowledge Graph (Neo4j)**. By integrating a **Graph Database** with **LLMs (via LangChain/LangGraph)**, it provides deep analysis, hidden correlation discovery, an autonomous reasoning agent that answers complex security questions, and a simulation engine for attack scenarios.
+COIN is a platform that transforms fragmented and unstructured cyber threat data into a machine-readable **Knowledge Graph (Neo4j)**. It bridges the gap between raw text reports and actionable intelligence by using **LLMs (via LangGraph)** to extract entities, map attack flows, and provide an autonomous reasoning agent for complex security queries.
 
 ---
 
@@ -10,69 +10,61 @@ This project structures fragmented cyber threat data (IOCs, TTPs, CVEs) into a m
 
 ### 1. 🕸️ Graph-Based Threat Modeling
 
-* **Property Graph Model**: Structures data into nodes and relationships (`:Incident`, `:Malware`, `:ThreatGroup`, `:Vulnerability`, `:AttackStep`) using **Neo4j**.
-* **Data Integration**: Ingests and normalizes data from disparate sources:
+* **Incident-Centric Schema**: Organizes data into a hierarchical structure: `Intelligence (Report) -> AttackStep (Phase) -> Entity (IoC/Artifact)`.
+* **Multi-Source Integration**: Automatically ingests and correlates data from:
 * **MITRE ATT&CK** (Tactics & Techniques)
-* **CISA KEV** (Exploited Vulnerabilities)
-* **URLhaus** (Malicious URLs/Payloads)
+* **CISA KEV** (Known Exploited Vulnerabilities)
+* **URLhaus** (Malicious URLs)
 
 
 
-### 2. 🎞️ AI-Driven Scenario Generation & Explorer
+### 2. 📝 Unstructured Intelligence Processor (New!)
 
-* **Synthetic Incident Generation**: Uses LLMs to generate realistic cyber attack scenarios based on real-world threat intelligence.
-* **Interactive Graph Explorer**: A "Cyberpunk" styled dynamic graph interface to explore:
-* **Full Kill Chain**: Visualize the step-by-step attack flow.
-* **Recursive Expansion**: Click on artifacts to uncover related incidents and threat actors.
-* **Timeline Analysis**: Detailed chronological breakdown of the attack.
+* **LLM-Powered Extraction**: Converts raw text (PDFs, blogs, CTI reports) into structured graph nodes.
+* **Exhaustive IoC Recovery**: Combines LLM reasoning with Regex patterns to ensure no IP, Hash, or Wallet address is missed.
+* **Entity Grounding**: Automatically normalizes entity names (e.g., matching "Remcos" to "RemcosRAT") using Fuzzy Search and LLM validation to prevent duplicate nodes.
 
+### 3. 🧠 Smart Agent (AI Analyst)
 
+* **Context-Aware Reasoning**: Unlike simple chatbots, the agent understands the "story" behind an IoC by tracing its path back to specific attack steps and incidents.
+* **ReAct Pattern**: Autonomously decides which tools to use—schema inspection, context search, or direct Cypher queries—to answer complex questions.
+* ** MCP Architecture (Internalized)**: Tools are modularized for easy extension to external providers like VirusTotal or Shodan.
 
-### 3. 🧠 Autonomous Reasoning Agent
+### 4. 🎞️ Scenario Explorer
 
-* **LangGraph Integration**: Uses ReAct (Reason+Act) pattern to autonomously inspect the schema, write **Cypher** queries, and self-correct errors.
-* **Context-Aware**: Remembers conversation history and context using optimized LLM context windows.
-
-### 4. 🔍 Deep & Correlation Analysis
-
-* **Entity Profiling**: Detailed analysis of specific Incidents or Malware using Graph Traversal.
-* **Multi-hop Correlation**: Traces indirect relationships (e.g., "Do these two different IPs share a common attack technique or malware family?").
-
-### 5. 🖥️ Multi-Interface Support
-
-* **Streamlit UI**: A comprehensive web dashboard for visual analysis, agent interaction, and scenario exploration.
-* **Interactive CLI**: A lightweight terminal interface for quick queries.
-* **MCP Server**: Supports **Model Context Protocol**, allowing integration with AI clients like Claude Desktop.
+* **Kill Chain Visualization**: Uses `streamlit-agraph` to provide an interactive view of the attack flow.
+* **Category Classification**: Distinguishes between actual **Incidents**, **Malware Analyses**, and **Threat Reports** with distinct visual styles.
 
 ---
 
 ## 🏗️ Architecture
 
-The system follows a modular architecture separating the Core Logic, Services, and Application Layers.
+The system follows a modular architecture separating Data Ingestion, Intelligence Processing, and AI Reasoning layers.
 
 ```mermaid
 graph TD
-    Data[Raw Feeds] -->|Download| RawFiles
-    RawFiles -->|ETL Scripts| Neo4j[(Neo4j Graph DB)]
-    Neo4j -->|Context| Gen[AI Generator]
-    Gen -->|Create Scenarios| Incidents[Incidents JSON]
-    Incidents -->|ETL| Neo4j
+    Text[Unstructured Reports] -->|Intelligence Processor| LLM_Ext[LLM Extraction & Regex]
+    LLM_Ext -->|Validation & Grounding| Neo4j[(Neo4j Graph DB)]
+    
+    Feeds[MITRE / KEV / URLhaus] -->|ETL Pipelines| Neo4j
     
     subgraph "Core Services (src/)"
-        Config --> Graph_Client
-        Graph_Client -->|Cypher| Neo4j
-        LLM_Client -->|Ollama/OpenAI| LLM_Model
-        
-        Analysis_Svc --> Graph_Client & LLM_Client
-        Correlation_Svc --> Graph_Client & LLM_Client
-        Agent_Svc --> LangGraph
+        Tools[src/tools/ - Neo4j Context Tools]
+        Agent[src/services/agent.py - LangGraph]
+        Processor[src/services/intelligence_processor.py]
     end
     
-    subgraph "Applications (apps/)"
-        CLI[Terminal CLI] --> Analysis_Svc & Correlation_Svc & Agent_Svc
-        WebUI[Streamlit UI] --> Analysis_Svc & Correlation_Svc & Agent_Svc
-        MCP[MCP Server] --> Graph_Client
+    subgraph "Application Layer (apps/ui/)"
+        Home[Home.py - Dashboard]
+        Processing[4_Intelligence_Processing.py]
+        SmartAgent[5_Smart_Agent.py]
     end
+    
+    Neo4j <--> Tools
+    Tools <--> Agent
+    Agent <--> SmartAgent
+    Processor <--> Processing
+
 ```
 
 ---
@@ -82,101 +74,52 @@ graph TD
 ```text
 cyber-ontology/
 ├── apps/                 # Application Entry Points
-│   ├── cli/              # Interactive Command-Line Interface
-│   ├── ui/               # Streamlit Web Dashboard
-│   │   └── pages/        # Deep Analysis, Correlation, Scenario Explorer
-│   └── mcp/              # Model Context Protocol Server
+│   └── ui/               # Streamlit Web Dashboard
+│       ├── Home.py       # System Dashboard & Navigation
+│       └── pages/        # Analysis, Correlation, Processing, Smart Agent
 ├── src/                  # Core Business Logic
-│   ├── core/             # Configuration, Neo4j Client & LLM Wrappers
-│   └── services/         # Analysis, Correlation, Agent Logic
-├── data/                 # Data Storage
-│   ├── raw/              # Raw downloads (MITRE, KEV, URLHaus)
-│   ├── generated/        # AI-generated incident scenarios
-│   └── processed/        # Normalized JSON files for ETL
-├── scripts/              # Setup & Data Processing Scripts
-│   ├── etl/              # Knowledge Graph Loaders (ETL)
-│   │   ├── preprocess_kev.py       # CISA KEV -> Neo4j
-│   │   ├── preprocess_mitre.py     # MITRE ATT&CK -> Neo4j
-│   │   ├── preprocess_urlhaus.py   # URLHaus -> Neo4j
-│   │   └── process_incidents.py    # Generated Incidents -> Neo4j
-│   ├── setup/            # Initial Setup & Generators
-│   │   ├── download_*.sh           # Data Downloaders
-│   │   ├── init_db.py              # Neo4j Constraints/Indexes Setup
-│   │   └── generate_incidents.py   # AI Scenario Generator
-│   └── setup_pipeline.sh # 🚀 Master Setup Script
-├── .streamlit/           # Streamlit Theme Configuration
-├── .env                  # Environment Variables
-├── requirements.txt      # Python Dependencies
-└── README.md             # Documentation
+│   ├── core/             # Config, Neo4j Client, Pydantic Schemas
+│   │   ├── repository/   # DB Ingestion Logic (Graph Repository)
+│   │   └── schemas.py    # Data Models (IntelligenceReport, Entity)
+│   ├── services/         # Business Logic (Processor, Agent)
+│   └── tools/            # Modular LangChain Tools (Neo4j Context Search)
+├── data/                 # Data Storage (Raw, Generated, Processed)
+├── scripts/              # Setup & ETL Pipeline Scripts
+└── requirements.txt      # Python Dependencies
+
 ```
 
 ---
 
 ## 🚀 Getting Started
 
-### Prerequisites
+### 1. Prerequisites
 
 * **Python 3.10+**
-* **Docker** (for running Neo4j container)
-* **Ollama** (for local LLM) or OpenAI API Key
+* **Neo4j DB** (Docker recommended)
+* **Ollama** (Local LLM) or **OpenAI API Key**
 
-### 1. Environment Setup
+### 2. Environment Setup
 
 ```bash
-# Clone the repository
 git clone https://github.com/your-username/cyber-ontology.git
 cd cyber-ontology
-
-# Create virtual environment
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-
-# Install dependencies
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Configuration (`.env`)
+### 3. Neo4j Configuration
 
-Create a `.env` file in the project root:
+Update your `.env` file with Neo4j and LLM credentials:
 
 ```ini
-# --- Neo4j Database Settings ---
 NEO4J_URI=bolt://localhost:7687
-NEO4J_USERNAME=neo4j
+NEO4J_USER=neo4j
 NEO4J_PASSWORD=your_password
-
-# --- LLM Settings (Choose 'ollama' or 'openai') ---
-LLM_PROVIDER=ollama
-
-# Ollama Config
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=llama3.1
-OLLAMA_NUM_CTX=16384
-
-# OpenAI Config (Optional)
-# OPENAI_API_KEY=sk-proj-...
-# OPENAI_MODEL=gpt-4o
+LLM_PROVIDER=openai  # or ollama
+OPENAI_API_KEY=sk-...
 ```
-
-### 3. Database Setup (Neo4j)
-
-**Option A: Docker Run**
-
-```bash
-docker run -d \
-  --name neo4j-coin \
-  -p 7474:7474 -p 7687:7687 \
-  -e NEO4J_AUTH=neo4j/your_password \
-  neo4j:latest
-```
-
-**Option B: Docker Compose**
-
-```bash
-docker-compose up -d
-```
-
-Access the Neo4j Browser at `http://localhost:7474`.
 
 ### 4. Data Pipeline Execution (Recommended)
 
@@ -202,52 +145,28 @@ chmod +x scripts/setup_pipeline.sh
 
 ## 🖥️ Usage
 
-### 1. Streamlit Web Dashboard (Recommended)
-
-The most comprehensive interface with visualizations.
+### 📊 Running the Dashboard
 
 ```bash
 streamlit run apps/ui/Home.py
 ```
 
-* **Deep Analysis**: Profile specific entities.
-* **Correlation**: Find hidden links between artifacts.
-* **Smart Agent**: Chat with the autonomous AI agent (Text-to-Cypher).
-* **Scenario Explorer**: Interactive graph visualization of attack kill chains.
-
-### 2. Interactive CLI
-
-A fast, lightweight terminal tool.
-
-```bash
-python apps/cli/main.py
-```
-
-### 3. Model Context Protocol (MCP) Server
-
-To use this ontology with **Claude Desktop** or other MCP clients:
-
-Add this to your Claude Desktop config (`claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "cyber-ontology": {
-      "command": "/path/to/your/venv/bin/python",
-      "args": ["/path/to/cyber-ontology/apps/mcp/server_neo4j.py"]
-    }
-  }
-}
-```
+1. **Ingest Data**: Go to `Intelligence Processing`, paste a raw CTI report, and click **Analyze**. Review the extracted graph and click **Ingest into Neo4j**.
+2. **Analyze Context**: Use the `Scenario Explorer` to see how the attack unfolded step-by-step.
+3. **Chat with Agent**: Open `Smart Agent` and ask: *"CVE-2025-55182에 대해 알려줘. 어떤 사건이랑 연관되어 있어?"*
 
 ---
 
-## Roadmap
+## 🛡️ Roadmap
 
-* [x] Migration from Fuseki (RDF) to Neo4j (Property Graph)
-* [x] Synthetic Incident Generation Pipeline
-* [x] Interactive Scenario Explorer (Streamlit-Agraph)
-* [x] Autonomous Agent (Text-to-Cypher)
-* [ ] **Unstructured Data Processing (PDF/HTML Reports to Graph)**
-* [ ] Automated TTP mapping from CTI reports
-* [ ] Time-series analysis for campaign tracking
+* [x] Migration to Neo4j Property Graph
+* [x] **Unstructured CTI Report Processor (Text-to-Graph)**
+* [x] **Context-Aware Autonomous Agent (Incident-Step-Entity Tracing)**
+* [x] Entity Grounding & Normalization Logic
+* [ ] Multi-Modal MCP Server (External Claude Desktop Support)
+* [ ] Real-time Alerting via Graph Triggers
+* [ ] Automated Mitre ATT&CK Mapping refinement
+
+---
+
+**© 2026 Cyber Ontology Intelligence Project. Powered by Neo4j & LangGraph.**

@@ -46,7 +46,7 @@ NODE_STYLES = {
 
 st.title("🕸️ Interactive Incident Graph Explorer")
 st.markdown("""
-**Graph Walking Mode**: 아티팩트(Malware 등)를 눌러 연결된 사건을 찾고, **그 사건 노드를 다시 눌러** 전체 전말을 파헤치세요.
+Graph Walking Mode: 아티팩트(Malware 등)를 눌러 연결된 사건을 찾고, 그 사건 노드를 다시 눌러 전체 전말을 파헤치세요.
 """)
 
 # ==============================================================================

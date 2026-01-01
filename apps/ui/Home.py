@@ -6,7 +6,6 @@ import socket
 from time import sleep
 
 # [경로 설정]
-# apps/ui/Home.py 위치에서 프로젝트 루트(coin)까지의 경로
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
 from src.core.config import settings
@@ -16,7 +15,7 @@ from src.core.graph_client import graph_client
 # 1. 페이지 설정
 # ==============================================================================
 st.set_page_config(
-    page_title="COIN",
+    page_title="COIN Dashboard",
     page_icon="🛡️",
     layout="wide"
 )
@@ -28,8 +27,6 @@ st.set_page_config(
 def check_neo4j_status():
     """Neo4j 도커 컨테이너 및 DB 접속 상태 확인"""
     try:
-        # graph_client를 이용해 가벼운 쿼리 실행
-        # 이것이 성공하면 도커 컨테이너가 켜져 있고, 포트가 열려 있고, 인증도 성공한 것임
         result = graph_client.query("RETURN 1")
         if result and result[0]['1'] == 1:
             return True, "Running"
@@ -41,14 +38,12 @@ def check_llm_status():
     """LLM 서비스 상태 확인"""
     if settings.LLM_PROVIDER == "ollama":
         try:
-            # Ollama Health check or Tags check
             res = requests.get(f"{settings.OLLAMA_BASE_URL}/api/tags", timeout=2)
             if res.status_code == 200:
                 return True, "Running (Local)"
         except:
             return False, "Ollama Stopped"
     else:
-        # OpenAI는 API Key 존재 여부로 판단 (실제 호출은 비용 문제로 생략)
         if settings.OPENAI_API_KEY:
             return True, "Active (Cloud)"
         else:
@@ -84,7 +79,7 @@ with col1:
     st.write(f"- **Provider:** `{settings.LLM_PROVIDER.upper()}`")
     st.write(f"- **Model:** `{current_model}`")
 
-# 2. Neo4j (Docker) Status
+# 2. Neo4j Status
 with col2:
     is_up, status_msg = check_neo4j_status()
     st.metric(
@@ -96,7 +91,7 @@ with col2:
     if not is_up:
         st.caption(f"⚠️ {status_msg}")
 
-# 3. LLM Service Status
+# 3. LLM Status
 with col3:
     llm_up, llm_msg = check_llm_status()
     st.metric(
@@ -108,56 +103,89 @@ with col3:
 
 # 4. Data Graph Info
 with col4:
-    # DB에 있는 노드 개수 살짝 보여주기
     try:
-        count_res = graph_client.query("MATCH (n) RETURN count(n) as cnt")
-        total_nodes = count_res[0]['cnt'] if count_res else 0
-        st.metric(label="Total Knowledge Nodes", value=f"{total_nodes:,}", delta="Entities")
+        # 전체 노드 수 확인
+        total_res = graph_client.query("MATCH (n) RETURN count(n) as cnt")
+        total_nodes = total_res[0]['cnt'] if total_res else 0
+        
+        # Incident(시나리오) 수 확인
+        inc_res = graph_client.query("MATCH (n:Incident) RETURN count(n) as cnt")
+        total_incidents = inc_res[0]['cnt'] if inc_res else 0
+        
+        st.metric(
+            label="Total Intelligence", 
+            value=f"{total_incidents} Incidents", 
+            delta=f"Nodes: {total_nodes:,}"
+        )
     except:
-        st.metric(label="Total Knowledge Nodes", value="Unknown", delta="Sync Error")
+        st.metric(label="Knowledge Graph", value="Unknown", delta="Sync Error")
 
 st.markdown("---")
 
-# 네비게이션 가이드
-st.subheader("🧭 Analysis Modules")
-st.markdown("""
-왼쪽 사이드바에서 분석 모드를 선택하세요. 이 시스템은 **MITRE ATT&CK, CISA KEV, URLHaus** 및 **생성된 시나리오** 데이터를 통합 분석합니다.
-""")
+# ==============================================================================
+# 4. 주요 분석 모듈 소개 (Files 1~4)
+# ==============================================================================
+st.subheader("🧭 Core Analysis Modules")
+st.markdown("사이드바 메뉴를 통해 아래 4가지 핵심 분석 도구를 사용할 수 있습니다.")
 
-# [변경] 4개의 컬럼으로 확장
+# 4개의 컬럼 (1, 2, 3, 4번 파일 대응)
 mode_col1, mode_col2, mode_col3, mode_col4 = st.columns(4)
 
 with mode_col1:
     st.markdown("""
-    ### 1. Deep Analysis
-    **심층 분석 및 프로파일링**
-    * Incident, Threat Group, Malware, CVE에 대한 상세 정보를 조회합니다.
-    * LLM과 그래프 데이터를 결합한 리포트를 제공합니다.
+    #### 1. Deep Analysis
+    **🔎 심층 분석 및 프로파일링**
+    * Threat Group, Malware 상세 정보 조회
+    * LLM 기반 Graph RAG 리포트 생성
+    * 엔티티 중심의 심층 정보 탐색
     """)
 
 with mode_col2:
     st.markdown("""
-    ### 2. Correlation
-    **위협 연관성 분석**
-    * IP, Hash, URL 등 파편화된 IoC를 입력하여 분석합니다.
-    * 그래프 알고리즘을 통해 숨겨진 공격 캠페인과 배후를 추적합니다.
+    #### 2. Correlation
+    **🔗 위협 연관성 분석**
+    * IoC (IP, Hash, URL) 간의 연결고리 추적
+    * 그래프 알고리즘을 통한 배후 공격 그룹 식별
+    * 숨겨진 위협 패턴 시각화
     """)
 
 with mode_col3:
     st.markdown("""
-    ### 3. Smart Agent
-    **AI 자율 에이전트**
-    * 자연어로 보안 관련 질문을 던져보세요.
-    * AI가 스스로 Cypher 쿼리를 작성하여 DB를 탐색하고 답변합니다.
+    #### 3. Scenario Explorer
+    **🎬 공격 시나리오 탐색**
+    * AI가 추출한 Incident 구조(Incident-Step-Entity) 시각화
+    * Kill Chain 단계별 공격 흐름(Attack Flow) 추적
+    * 사건 중심의 맥락 파악
     """)
 
 with mode_col4:
     st.markdown("""
-    ### 4. Scenario Explorer
-    **시나리오 탐색기 (New!)**
-    * AI가 생성한 가상 침해 사고(Incident)를 조회합니다.
-    * 공격 단계(Kill Chain)별 상세 흐름과 아티팩트를 시각화합니다.
+    #### 4. Intel Processing
+    **📝 비정형 리포트 처리**
+    * CTI 텍스트 리포트 업로드 및 분석
+    * LLM을 활용한 자동 구조화 (Entity Extraction)
+    * Neo4j 지식 그래프로 데이터 적재
     """)
+
+# ==============================================================================
+# 5. 스마트 에이전트 (강조 섹션 - File 5)
+# ==============================================================================
+st.markdown("---")
+st.subheader("🤖 Smart Agent (AI Analyst)")
+
+# 강조 박스 (Success, Info, or Warning color)
+with st.container():
+    st.success("""
+    ### 💬 "Ask Anything to your Knowledge Graph"
+    
+    **Smart Agent**는 단순한 챗봇이 아닙니다. **Neo4j 그래프 데이터베이스와 실시간으로 연동**되는 AI 보안 분석가입니다.
+    
+    * **Context-Aware Search:** "이 취약점은 어떤 사건에서 발견됐어?"라고 물으면 사건의 맥락(Incident -> Step -> Entity)을 파악해 답변합니다.
+    * **Natural Language Query:** 복잡한 Cypher 쿼리를 몰라도 한국어로 질문하면 자동으로 데이터를 찾아줍니다.
+    * **Cross-Analysis:** 여러 사건에 걸쳐 등장하는 공격자나 도구를 자동으로 연결해줍니다.
+    
+    👉 **왼쪽 사이드바에서 `5_Smart_Agent`를 선택하여 대화를 시작하세요.**
+    """, icon="🧠")
 
 # 푸터
 st.markdown("---")

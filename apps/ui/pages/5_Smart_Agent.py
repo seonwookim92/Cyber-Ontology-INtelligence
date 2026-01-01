@@ -19,6 +19,7 @@ from src.core.config import settings
 # ==============================================================================
 # 0. 헬퍼 함수: 후속 질문 생성기
 # ==============================================================================
+
 def generate_followup_questions(last_query, last_answer):
     """
     LLM을 이용해 사용자가 다음에 물어볼 만한 질문 3가지를 생성합니다.
@@ -39,7 +40,7 @@ def generate_followup_questions(last_query, last_answer):
             [User Question] {last_query}
             [Agent Answer] {last_answer}
             
-            Example format: 이 악성코드의 침해지표(IOC)는 뭐야?|관련된 대응 방안은?|어떤 그룹이 배후야?
+            Example format: 이 공격에 사용된 다른 IP는 뭐야?|관련된 해킹 그룹은 누구야?|대응 방안은 어떻게 돼?
             """)
         ])
         
@@ -56,8 +57,8 @@ st.set_page_config(page_title="Cyber Threat Analyst", page_icon="🕵️‍♂�
 
 st.title("🕵️‍♂️ Neo4j Cyber Threat Analyst")
 st.markdown("""
-Neo4j Knowledge Graph를 기반으로 보안 위협을 분석하는 AI 에이전트입니다.  
-**MITRE ATT&CK, CISA KEV, URLHaus** 데이터를 교차 분석하여 답변합니다.
+**Neo4j Knowledge Graph**와 연동된 AI 보안 분석가입니다.  
+**Incident(사건), Malware, Threat Group, IoC** 정보를 문맥(Context) 기반으로 답변합니다.
 """)
 
 # ==============================================================================
@@ -69,26 +70,29 @@ if "messages" not in st.session_state:
 if "langchain_history" not in st.session_state:
     st.session_state.langchain_history = []
 
-# [변경] 입력 트리거 관리를 위한 변수
+# 입력 트리거 관리를 위한 변수
 if "trigger_query" not in st.session_state:
     st.session_state.trigger_query = None
 
-# [신규] 마지막 답변에 대한 후속 질문 리스트 저장
+# 마지막 답변에 대한 후속 질문 리스트 저장
 if "followup_suggestions" not in st.session_state:
     st.session_state.followup_suggestions = []
 
 # ==============================================================================
-# 3. 사이드바: 샘플 질문
+# 3. 사이드바: 샘플 질문 (업데이트됨)
 # ==============================================================================
 with st.sidebar:
     st.header("📝 Sample Questions")
+    st.caption("클릭하면 자동으로 질문합니다.")
+    
+    # [변경] 스키마(Incident -> Step -> Entity)에 맞춘 질문들로 교체
     sample_questions = [
-        "이 데이터베이스의 스키마 구조를 알려줘.",
-        "최근 'MongoDB'와 관련된 취약점(CVE)이 있어?",
-        "Mozi 봇넷과 관련된 악성 URL 5개만 찾아줘.",
-        "CVE-2025-14733 취약점은 어떤 공격 기법이랑 연관돼?",
-        "APT29 그룹이 사용하는 악성코드들은 뭐야?",
-        "IP '1.2.3.4'나 해시값 같은 아티팩트들 간의 숨겨진 연관성을 분석해줘. (테스트용)",
+        "현재 데이터베이스의 스키마 구조(Incident, Entity 등)를 알려줘.",
+        "최근 등록된 'EtherRAT' 관련 사건에 대해 자세히 설명해줘.",
+        "CVE-2025-55182 취약점은 어떤 공격 단계(Phase)에서 사용됐어?",
+        "IP '193.24.123.68'이 포함된 침해 사고 정보를 찾아줘.",
+        "최근 '빗썸'이나 '암호화폐'를 대상으로 한 공격 캠페인이 있어?",
+        "특정 해시값(MD5)이 여러 사건에 동시에 등장하는지 확인해줘. (테스트용)",
     ]
 
     for q in sample_questions:
@@ -96,6 +100,9 @@ with st.sidebar:
             st.session_state.trigger_query = q
             st.session_state.followup_suggestions = [] # 새 질문이므로 기존 추천 초기화
             st.rerun()
+            
+    st.markdown("---")
+    st.info("💡 **Tip:** 리포트를 먼저 `Intelligence Processing` 메뉴에서 등록해야 답변이 가능합니다.")
 
 # ==============================================================================
 # 4. 메인 로직 함수
@@ -116,7 +123,9 @@ def process_query(user_input):
         status_placeholder = st.status("🧠 Agent is reasoning...", expanded=True)
         
         try:
+            # [핵심] 수정한 agent.py의 그래프 빌더 호출
             graph = agent.build_agent_graph()
+            
             current_human_msg = HumanMessage(content=user_input)
             input_messages = st.session_state.langchain_history + [current_human_msg]
             
@@ -129,22 +138,27 @@ def process_query(user_input):
                     
                     last_msg = current_state_messages[-1]
                     
+                    # Tool 호출 결정 시
                     if isinstance(last_msg, AIMessage) and last_msg.tool_calls:
                         for tc in last_msg.tool_calls:
                             step_count += 1
                             st.write(f"**Step {step_count}:** 🤔 Decided to use tool `{tc['name']}`")
                             with st.expander(f"Arguments for {tc['name']}", expanded=False):
-                                st.code(json.dumps(tc['args'], indent=2), language="json")
+                                st.code(json.dumps(tc['args'], indent=2, ensure_ascii=False), language="json")
 
+                    # Tool 실행 결과
                     elif isinstance(last_msg, ToolMessage):
                         st.write(f"**Step {step_count}:** 🔍 Tool Output (`{last_msg.name}`)")
                         with st.expander("Show Result", expanded=False):
                             try:
+                                # JSON 파싱 시도
                                 content_json = json.loads(last_msg.content)
                                 st.json(content_json)
                             except:
-                                st.code(last_msg.content[:1000] + "...", language="text") # 너무 길면 자름
+                                # 일반 텍스트면 그냥 출력
+                                st.code(last_msg.content[:2000] + ("..." if len(last_msg.content)>2000 else ""), language="text")
 
+                    # 최종 답변
                     elif isinstance(last_msg, AIMessage) and last_msg.content:
                         if not last_msg.tool_calls:
                             final_response = last_msg.content
@@ -154,22 +168,22 @@ def process_query(user_input):
             if final_response:
                 response_placeholder.markdown(final_response)
                 
-                # 저장
+                # 대화 기록 저장
                 st.session_state.messages.append({"role": "assistant", "content": final_response})
                 st.session_state.langchain_history.append(current_human_msg)
                 st.session_state.langchain_history.append(AIMessage(content=final_response))
                 
-                # [신규] 후속 질문 생성 (비동기처럼 보이게 처리)
+                # 후속 질문 생성
                 suggestions = generate_followup_questions(user_input, final_response)
                 st.session_state.followup_suggestions = suggestions
                 st.rerun() # 추천 질문 렌더링을 위해 리런
                 
             else:
-                response_placeholder.error("답변을 생성하지 못했습니다.")
+                response_placeholder.error("죄송합니다. 답변을 생성하지 못했습니다.")
 
         except Exception as e:
             status_placeholder.update(label="❌ Error Occurred", state="error")
-            st.error(f"Error: {e}")
+            st.error(f"Error Details: {e}")
 
 # ==============================================================================
 # 5. 화면 렌더링 루프
@@ -198,6 +212,6 @@ if st.session_state.trigger_query:
     process_query(query)
 
 # D. 채팅 입력창 (항상 최하단에 유지됨)
-if prompt := st.chat_input("질문을 입력하세요..."):
+if prompt := st.chat_input("보안 관련 질문을 입력하세요 (예: 이 IP는 어떤 사건과 연관돼?)..."):
     st.session_state.followup_suggestions = [] # 새 질문 입력 시 추천 초기화
     process_query(prompt)
