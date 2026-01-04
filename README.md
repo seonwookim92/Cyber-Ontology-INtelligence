@@ -1,4 +1,4 @@
-# 🛡️ Cyber Threat Ontology Intelligence (COIN)
+# 🛡️ Cyber Ontology INtelligence (COIN)
 
 **A Next-Gen Threat Intelligence Platform powered by Knowledge Graphs and Autonomous AI Agents.**
 
