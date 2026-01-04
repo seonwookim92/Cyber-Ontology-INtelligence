@@ -151,7 +151,7 @@ with mode_col2:
 
 with mode_col3:
     st.markdown("""
-    #### 3. Scenario Explorer
+    #### 3. Graph Analysis
     **🎬 공격 시나리오 탐색**
     * AI가 추출한 Incident 구조(Incident-Step-Entity) 시각화
     * Kill Chain 단계별 공격 흐름(Attack Flow) 추적
@@ -160,7 +160,7 @@ with mode_col3:
 
 with mode_col4:
     st.markdown("""
-    #### 4. Intel Processing
+    #### 4. Ontology Extractor
     **📝 비정형 리포트 처리**
     * CTI 텍스트 리포트 업로드 및 분석
     * LLM을 활용한 자동 구조화 (Entity Extraction)

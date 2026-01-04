@@ -94,8 +94,8 @@ cyber-ontology/
 │       └── pages/        # UI Pages for each feature
 │           ├── 1_Deep_Analysis.py
 │           ├── 2_Correlation.py
-│           ├── 3_Scenario_Explorer.py
-│           ├── 4_Intelligence_Processing.py
+│           ├── 3_Graph_Analysis.py
+│           ├── 4_Ontology_Extractor.py
 │           └── 5_Smart_Agent.py
 ├── src/                  # Core Business Logic
 │   ├── core/             # Config, DB Client, Pydantic Schemas
