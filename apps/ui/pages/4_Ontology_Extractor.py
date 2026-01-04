@@ -11,7 +11,7 @@ from src.services.intelligence_processor import processor
 from src.core.repository.graph_repository import save_incident_to_graph
 from streamlit_agraph import agraph, Node, Edge, Config
 
-st.set_page_config(page_title="Intelligence Processing", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="Ontology Extractor", page_icon="🧠", layout="wide")
 
 # ==============================================================================
 # [STYLE] 노드 스타일 정의
@@ -52,7 +52,7 @@ if "graph_version" not in st.session_state:
 # ==============================================================================
 # 1. Header & Input
 # ==============================================================================
-st.title("🧠 Ontology Intelligence Processor")
+st.title("🧠 Ontology Extractor")
 st.markdown("""
 비정형데이터(위협리포트, 블로그, 분석자료 등)에서 LLM을 활용해 사이버 위협 인텔리전스를 추출하고 이를 구조화하여 지식그래프에 적재합니다.
 """)

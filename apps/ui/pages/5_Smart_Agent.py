@@ -53,9 +53,9 @@ def generate_followup_questions(last_query, last_answer):
 # ==============================================================================
 # 1. 페이지 설정
 # ==============================================================================
-st.set_page_config(page_title="Cyber Threat Analyst", page_icon="🕵️‍♂️", layout="wide")
+st.set_page_config(page_title="Smart Agent", page_icon="🕵️‍♂️", layout="wide")
 
-st.title("🕵️‍♂️ Neo4j Cyber Threat Analyst")
+st.title("🕵️‍♂️ Smart Agent (Chatbot)")
 st.markdown("""
 **Neo4j Knowledge Graph**와 연동된 AI 보안 분석가입니다.  
 **Incident(사건), Malware, Threat Group, IoC** 정보를 문맥(Context) 기반으로 답변합니다.

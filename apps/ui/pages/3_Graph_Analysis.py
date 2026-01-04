@@ -8,7 +8,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.
 from src.core.graph_client import graph_client
 from streamlit_agraph import agraph, Node, Edge, Config
 
-st.set_page_config(page_title="Scenario Explorer", page_icon="🕸️", layout="wide")
+st.set_page_config(page_title="Graph Analysis", page_icon="🕸️", layout="wide")
 
 # ==============================================================================
 # [STYLE] 커스텀 비주얼 스타일
@@ -44,9 +44,9 @@ NODE_STYLES = {
     }
 }
 
-st.title("🕸️ Interactive Incident Graph Explorer")
+st.title("🕸️ Graph Analysis")
 st.markdown("""
-Graph Walking Mode: 아티팩트(Malware 등)를 눌러 연결된 사건을 찾고, 그 사건 노드를 다시 눌러 전체 전말을 파헤치세요.
+Graph Walking Mode: 아티팩트(Malware 등)를 눌러 연결된 사건을 찾고, 그 사건 노드에서 확장합니다.
 """)
 
 # ==============================================================================
