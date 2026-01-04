@@ -27,14 +27,14 @@ graph TD
         S1[MITRE ATT&CK]
         S2[CISA KEV]
         S3[URLhaus]
-        S4[Unstructured Reports\n(PDF, TXT, Blogs)]
+        S4["Unstructured Reports<br/>(PDF, TXT, Blogs)"]
     end
 
     subgraph "Data Processing Layer"
         direction TB
-        ETL[ETL Scripts\n(scripts/etl/*.py)]
-        Processor[Intelligence Processor\n(src/services/intelligence_processor.py)]
-        LLM[(LLM\nOllama/OpenAI)]
+        ETL["ETL Scripts<br/>(scripts/etl/*.py)"]
+        Processor["Intelligence Processor<br/>(src/services/intelligence_processor.py)"]
+        LLM[(LLM<br/>Ollama/OpenAI)]
         
         S1 & S2 & S3 --> ETL
         S4 --> Processor
@@ -50,10 +50,10 @@ graph TD
 
     subgraph "Core Services (Backend)"
         direction TB
-        GraphClient[Graph Client\n(src/core/graph_client.py)]
-        Services[Business Logic\n(src/services/*)]
-        Tools[Agent Tools\n(src/tools/neo4j.py)]
-        Agent[Smart Agent\n(src/services/agent.py)]
+        GraphClient["Graph Client<br/>(src/core/graph_client.py)"]
+        Services["Business Logic<br/>(src/services/*)"]
+        Tools["Agent Tools<br/>(src/tools/neo4j.py)"]
+        Agent["Smart Agent<br/>(src/services/agent.py)"]
     end
     
     Neo4j <--> GraphClient
@@ -63,9 +63,9 @@ graph TD
     
     subgraph "Application Layer"
         direction LR
-        UI[Streamlit UI\n(apps/ui)]
-        CLI[CLI App\n(apps/cli)]
-        MCP[MCP Server\n(apps/mcp)]
+        UI["Streamlit UI<br/>(apps/ui)"]
+        CLI["CLI App<br/>(apps/cli)"]
+        MCP["MCP Server<br/>(apps/mcp)"]
     end
 
     Services --> UI
