@@ -28,8 +28,21 @@ fi
 echo -e "${YELLOW}[System] Checking directory permissions...${NC}"
 mkdir -p data/raw data/processed data/generated
 # 현재 실행 유저의 권한으로 재조정 (필요 시 sudo 사용 권장)
+# Try to set ownership to the current user to avoid Neo4j (uid 7474) owning files.
+if command -v id >/dev/null 2>&1; then
+    CUR_UID=$(id -u)
+    CUR_GID=$(id -g)
+else
+    CUR_UID=1000
+    CUR_GID=1000
+fi
+if [ "$EUID" -ne 0 ]; then
+    sudo chown -R "${CUR_UID}:${CUR_GID}" data/ 2>/dev/null || echo "Warning: chown failed or sudo required."
+else
+    chown -R "${CUR_UID}:${CUR_GID}" data/ 2>/dev/null || true
+fi
 chmod -R 755 data/
-echo -e "  - Permissions updated to 755 for data directories."
+echo -e "  - Ownership set to ${CUR_UID}:${CUR_GID} and permissions updated to 755 for data directories."
 
 # ------------------------------------------------------------------------------
 # 1. 데이터 준비 (다운로드 및 파일 전처리)
@@ -134,6 +147,17 @@ if [ -f "$INCIDENT_FILE" ]; then
     python scripts/etl/process_incidents.py
 else
     echo -e "${YELLOW}No incident file found at $INCIDENT_FILE. Skipping ingestion.${NC}"
+fi
+
+# Ensure files are owned by current user after pipeline (Neo4j may have created files as uid 7474)
+if command -v id >/dev/null 2>&1; then
+    CUR_UID=$(id -u)
+    CUR_GID=$(id -g)
+    if [ "$EUID" -ne 0 ]; then
+        sudo chown -R "${CUR_UID}:${CUR_GID}" data/ 2>/dev/null || true
+    else
+        chown -R "${CUR_UID}:${CUR_GID}" data/ 2>/dev/null || true
+    fi
 fi
 
 echo -e "\n${BLUE}======================================================${NC}"
