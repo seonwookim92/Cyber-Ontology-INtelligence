@@ -3,6 +3,7 @@ from typing import List, Optional, Set
 from difflib import SequenceMatcher
 
 from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 from src.core.config import settings
 from src.core.schemas import IntelligenceReport, Entity, EntityResolution, AttackStep
@@ -10,7 +11,10 @@ from src.core.graph_client import graph_client
 
 class IntelligenceProcessor:
     def __init__(self):
-        self.llm = ChatOpenAI(model=settings.OPENAI_MODEL, temperature=0)
+        if settings.LLM_PROVIDER == "openai":
+            self.llm = ChatOpenAI(model=settings.OPENAI_MODEL, api_key=settings.OPENAI_API_KEY, temperature=0)
+        else:
+            self.llm = ChatOllama(model=settings.OLLAMA_MODEL, temperature=0, base_url=settings.OLLAMA_BASE_URL)
         # [변경] IntelligenceReport로 변경
         self.extractor = self.llm.with_structured_output(IntelligenceReport)
         self.resolver = self.llm.with_structured_output(EntityResolution)
