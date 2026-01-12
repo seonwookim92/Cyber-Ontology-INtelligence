@@ -88,11 +88,11 @@ with st.sidebar:
     # [변경] 스키마(Incident -> Step -> Entity)에 맞춘 질문들로 교체
     sample_questions = [
         "현재 데이터베이스의 스키마 구조(Incident, Entity 등)를 알려줘.",
-        "최근 등록된 'EtherRAT' 관련 사건에 대해 자세히 설명해줘.",
-        "CVE-2025-55182 취약점은 어떤 공격 단계(Phase)에서 사용됐어?",
+        "CVE-2025-14847 취약점과 '한국수력원자력 원전제어망' 사이에 연결점(연관성)이 있는지 찾아줘.",
+        "bc644febfc0a9500bcc24d26fbfa9cae라는 해시값이 여러 사건에 등장하는지 확인해줘.",
         "IP '193.24.123.68'이 포함된 침해 사고 정보를 찾아줘.",
-        "최근 '빗썸'이나 '암호화폐'를 대상으로 한 공격 캠페인이 있어?",
-        "특정 해시값(MD5)이 여러 사건에 동시에 등장하는지 확인해줘. (테스트용)",
+        "최근 6개월 내에 'DarkHydrus' 위협 그룹이 관련된 사건들을 알려줘.",
+        "Malware '4H RAT'이 연관된 사건들의 IoC들을 찾아줘"
     ]
 
     for q in sample_questions:
@@ -150,13 +150,16 @@ def process_query(user_input):
                     elif isinstance(last_msg, ToolMessage):
                         st.write(f"**Step {step_count}:** 🔍 Tool Output (`{last_msg.name}`)")
                         with st.expander("Show Result", expanded=False):
+                            raw = last_msg.content or ""
                             try:
-                                # JSON 파싱 시도
-                                content_json = json.loads(last_msg.content)
+                                content_json = json.loads(raw)
+                                # Show structured JSON and provide a download button for full content
                                 st.json(content_json)
-                            except:
-                                # 일반 텍스트면 그냥 출력
-                                st.code(last_msg.content[:2000] + ("..." if len(last_msg.content)>2000 else ""), language="text")
+                                st.download_button("Download JSON", data=json.dumps(content_json, ensure_ascii=False, indent=2), file_name=f"tool_result_{step_count}_{last_msg.name}.json", mime="application/json", key=f"dl_json_{step_count}_{last_msg.name}")
+                            except Exception:
+                                # Show full raw text and allow download
+                                st.code(raw, language="text")
+                                st.download_button("Download Result", data=raw, file_name=f"tool_result_{step_count}_{last_msg.name}.txt", mime="text/plain", key=f"dl_txt_{step_count}_{last_msg.name}")
 
                     # 최종 답변
                     elif isinstance(last_msg, AIMessage) and last_msg.content:

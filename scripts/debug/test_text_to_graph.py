@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 warnings.filterwarnings("ignore")
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../")))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
 from langchain_openai import ChatOpenAI
 from langchain_ollama import ChatOllama

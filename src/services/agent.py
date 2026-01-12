@@ -9,7 +9,8 @@ from langchain_core.messages import SystemMessage, BaseMessage
 
 from src.core.config import settings
 # [변경] 여기서 tools 모듈을 임포트합니다.
-from src.tools.neo4j import NEO4J_TOOLS 
+# Use the extended toolset (includes find_paths, schema introspection, traversal helpers)
+from src.tools.neo4j import NEO4J_TOOLS_EXTENDED as NEO4J_TOOLS
 # from src.tools.virustotal import VIRUSTOTAL_TOOLS (나중에 이렇게 추가)
 
 # 1. 사용할 모든 도구 합치기
@@ -37,6 +38,7 @@ def build_agent_graph():
     [Tools Strategy]
     - Always use `search_keyword_context` first for IoCs.
     - Check schema with `inspect_schema` if unsure.
+    - For connection analysis between entities, prefer `find_paths` (it returns paths and debug info).
 
     [Response Guidelines]
     - When asked about an IOC (e.g., "Tell me about CVE-2025-xxxx"), ALWAYS use `search_keyword_context` first.
