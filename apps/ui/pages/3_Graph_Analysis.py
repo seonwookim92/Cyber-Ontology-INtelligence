@@ -305,47 +305,45 @@ with st.sidebar:
         # [수정] 버튼 클릭 시 시드(Seed)를 변경하여 Config에 반영
         if st.button("🎲 Re-Layout", use_container_width=True):
             st.session_state.layout_seed += 1
+            if "graph_config" in st.session_state:
+                del st.session_state.graph_config
             st.rerun()
 
 # ==============================================================================
 # 4. Main Config & Layout
 # ==============================================================================
+if "graph_config" not in st.session_state:
+    # [수정] 시드값을 이용해 물리 엔진 파라미터를 미세하게 변경 -> 강제 리렌더링 유도
+    # 0.001 정도의 차이는 시각적으로 동일하지만, Streamlit은 변경된 Config로 인식함
+    spring_len_tweak = 250 + (st.session_state.layout_seed * 0.001)
 
-# [수정] 시드값을 이용해 물리 엔진 파라미터를 미세하게 변경 -> 강제 리렌더링 유도
-# 0.001 정도의 차이는 시각적으로 동일하지만, Streamlit은 변경된 Config로 인식함
-spring_len_tweak = 120 + (st.session_state.layout_seed * 0.001)
-
-config = Config(
-    width="100%",
-    height=750,
-    directed=True, 
-    hierarchical=False,
-    backgroundColor="#212529", 
-    link={
-        'labelProperty': 'label', 'renderLabel': True,
-        'color': '#666666',
-        'font': {'color': '#CCCCCC', 'size': 10, 'background': '#212529', 'strokeWidth': 0}
-    },
-    physics={
-        "enabled": True,
-        "barnesHut": {
-            "gravitationalConstant": -4000, 
-            "centralGravity": 0.3, 
-            "springLength": spring_len_tweak, # <-- [핵심] 여기에 Seed 반영
-            "springConstant": 0.04,
-            "damping": 0.09,
-            "avoidOverlap": 0.1
+    st.session_state.graph_config = Config(
+        width="100%",
+        height=750,
+        directed=True, 
+        physics=True,
+        hierarchical=False,
+        backgroundColor="#212529", 
+        link={
+            'labelProperty': 'label', 'renderLabel': True,
+            'color': '#666666',
+            'font': {'color': '#CCCCCC', 'size': 10, 'background': '#212529', 'strokeWidth': 0}
         },
-        "stabilization": {
-            "enabled": True,
-            "iterations": 1000,
-            "updateInterval": 25,
-            "onlyDynamicEdges": False,
-            "fit": True
+        physics_options={
+            "barnesHut": {
+                "gravitationalConstant": 0, 
+                "centralGravity": 0, 
+                "springLength": spring_len_tweak, # <-- [핵심] 여기에 Seed 반영
+                "springConstant": 0,
+                "damping": 0,
+                "avoidOverlap": 0.0001
+            }
         }
-    }
-)
+    )
 
+config = st.session_state.graph_config
+
+# ==============================================================================
 col1, col2 = st.columns([2.5, 1])
 
 with col1:
@@ -367,7 +365,6 @@ with col2:
                 if st.button("📂 Expand Incident Details"):
                     cnt = expand_node(selected_node_id)
                     st.success(f"Graph merged with {cnt} new nodes.")
-                    st.rerun()
             
             elif any(selected_node_id.startswith(p) for p in ["MAL_", "CVE_", "IOC_", "ACT_"]):
                 st.info("연관된 다른 사건이나 정보를 찾습니다.")
@@ -375,7 +372,6 @@ with col2:
                     cnt = expand_node(selected_node_id)
                     if cnt > 0:
                         st.success(f"{cnt} related items found!")
-                        st.rerun()
                     else:
                         st.warning("No new connections found.")
             else:
