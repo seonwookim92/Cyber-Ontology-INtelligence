@@ -24,12 +24,12 @@ class GraphLoader:
     def close(self):
         self.driver.close()
 
-    def run_query_with_result(self, query, desc="Executing query"):
+    def run_query_with_result(self, query, desc="Executing query", params=None):
         print(f"[*] {desc}...")
         start_time = time.time()
         with self.driver.session() as session:
             try:
-                result = session.run(query)
+                result = session.run(query, params or {})
                 record = result.single()
                 count_val = record[0] if record else 0
                 elapsed = time.time() - start_time
@@ -68,67 +68,126 @@ class GraphLoader:
         print("    -> Constraints and Full-Text Indexes applied.")
         time.sleep(2)
 
-        # 3. MITRE ATT&CK
+        # 3. MITRE ATT&CK (load from host CSVs to avoid container import path issues)
         print("\n=== [3/6] Loading MITRE ATT&CK ===")
-        q_mitre_nodes = """
-        LOAD CSV WITH HEADERS FROM 'file:///mitre_nodes.csv' AS row
-        CALL apoc.create.node([row.label, 'BaseNode'], {
-            stix_id: row.stix_id,
-            name: row.name,
-            mitre_id: row.mitre_id,
-            description: row.description
-        }) YIELD node
-        RETURN count(node)
-        """
-        self.run_query_with_result(q_mitre_nodes, "Loading MITRE Nodes")
+        mitre_nodes_path = os.path.join(PROJECT_ROOT, 'data', 'processed', 'mitre_nodes.csv')
+        mitre_rels_path = os.path.join(PROJECT_ROOT, 'data', 'processed', 'mitre_rels.csv')
 
-        q_mitre_rels = """
-        LOAD CSV WITH HEADERS FROM 'file:///mitre_rels.csv' AS row
-        MATCH (s:BaseNode {stix_id: row.source_id})
-        MATCH (t:BaseNode {stix_id: row.target_id})
-        CALL apoc.create.relationship(s, row.type, {}, t) YIELD rel
-        RETURN count(rel)
-        """
-        self.run_query_with_result(q_mitre_rels, "Loading MITRE Relationships")
+        def _batch(iterable, n=500):
+            l = len(iterable)
+            for i in range(0, l, n):
+                yield iterable[i:i+n]
+
+        # Load nodes via Python CSV and create using apoc.create.node in batches
+        nodes_count = 0
+        if os.path.exists(mitre_nodes_path):
+            with open(mitre_nodes_path, 'r', encoding='utf-8') as f:
+                reader = __import__('csv').DictReader(f)
+                rows = [r for r in reader]
+            for batch in _batch(rows, 500):
+                q = """
+                UNWIND $rows AS r
+                CALL apoc.create.node([r.label, 'BaseNode'], {stix_id: r.stix_id, name: r.name, mitre_id: r.mitre_id, description: r.description}) YIELD node
+                RETURN count(node) AS cnt
+                """
+                try:
+                    self.run_query_with_result(q, desc=f"Loading MITRE Nodes (batch {nodes_count // 500 + 1})", params={"rows": batch})
+                except Exception:
+                    pass
+                nodes_count += len(batch)
+        else:
+            print(f"    [!] Error: MITRE nodes CSV not found at {mitre_nodes_path}")
+
+        # Load relationships via CSV and create using apoc.create.relationship in batches
+        rels_count = 0
+        if os.path.exists(mitre_rels_path):
+            with open(mitre_rels_path, 'r', encoding='utf-8') as f:
+                reader = __import__('csv').DictReader(f)
+                rows = [r for r in reader]
+            for batch in _batch(rows, 500):
+                q = """
+                UNWIND $rows AS r
+                MATCH (s:BaseNode {stix_id: r.source_id})
+                MATCH (t:BaseNode {stix_id: r.target_id})
+                CALL apoc.create.relationship(s, r.type, {}, t) YIELD rel
+                RETURN count(rel) AS cnt
+                """
+                try:
+                    self.run_query_with_result(q, desc=f"Loading MITRE Relationships (batch {rels_count // 500 + 1})", params={"rows": batch})
+                except Exception:
+                    pass
+                rels_count += len(batch)
+        else:
+            print(f"    [!] Error: MITRE relationships CSV not found at {mitre_rels_path}")
 
         # 4. CISA KEV
         print("\n=== [4/6] Loading CISA KEV ===")
-        q_kev = """
-        LOAD CSV WITH HEADERS FROM 'file:///cisa_kev_clean.csv' AS row
-        MERGE (v:Vulnerability {cve_id: row.cve_id})
-        SET v.name = row.name,
-            v.vendor = row.vendor,
-            v.product = row.product,
-            v.description = row.description
-        RETURN count(v)
-        """
-        self.run_query_with_result(q_kev, "Loading KEV Data")
+        kev_path = os.path.join(PROJECT_ROOT, 'data', 'processed', 'cisa_kev_clean.csv')
+        if os.path.exists(kev_path):
+            with open(kev_path, 'r', encoding='utf-8') as f:
+                reader = __import__('csv').DictReader(f)
+                rows = [r for r in reader]
+            kev_count = 0
+            for batch in _batch(rows, 500):
+                q = """
+                UNWIND $rows AS r
+                MERGE (v:Vulnerability {cve_id: r.cve_id})
+                SET v.name = r.name, v.vendor = r.vendor, v.product = r.product, v.description = r.description
+                RETURN count(v) AS cnt
+                """
+                try:
+                    self.run_query_with_result(q, desc=f"Loading KEV Data (batch {kev_count // 500 + 1})", params={"rows": batch})
+                except Exception:
+                    pass
+                kev_count += len(batch)
+        else:
+            print(f"    [!] Error: KEV CSV not found at {kev_path}")
 
         # 5. URLHaus
         print("\n=== [5/6] Loading URLHaus & Fuzzy Linking ===")
-        q_urlhaus = """
-        LOAD CSV WITH HEADERS FROM 'file:///urlhaus_indicators.csv' AS row
-        MERGE (i:Indicator {id: row.id})
-        SET i.url = row.url, i.tags = row.tags
-        
-        WITH i, row
-        WHERE row.tags IS NOT NULL AND row.tags <> ''
-        
-        WITH i, split(row.tags, ',') AS tags
-        UNWIND tags AS tag
-        WITH i, trim(tag) AS clean_tag
-        WHERE size(clean_tag) > 3
-        
-        MATCH (m:Malware)
-        WHERE toLower(m.name) = toLower(clean_tag)
-           OR toLower(m.name) CONTAINS toLower(clean_tag)
-           OR toLower(clean_tag) CONTAINS toLower(m.name)
-           
-        MERGE (i)-[r:INDICATES]->(m)
-        SET r.method = 'fuzzy_match', r.matched_tag = clean_tag
-        RETURN count(r)
-        """
-        self.run_query_with_result(q_urlhaus, "Loading URLHaus & Linking (Fuzzy)")
+        urlhaus_path = os.path.join(PROJECT_ROOT, 'data', 'processed', 'urlhaus_indicators.csv')
+        if os.path.exists(urlhaus_path):
+            with open(urlhaus_path, 'r', encoding='utf-8') as f:
+                reader = __import__('csv').DictReader(f)
+                rows = [r for r in reader]
+            url_count = 0
+            for batch in _batch(rows, 500):
+                # create indicators
+                q_create = """
+                UNWIND $rows AS r
+                MERGE (i:Indicator {id: r.id})
+                SET i.url = r.url, i.tags = r.tags
+                RETURN count(i) AS cnt
+                """
+                try:
+                    self.run_query_with_result(q_create, desc=f"Creating Indicators (batch {url_count // 500 + 1})", params={"rows": batch})
+                except Exception:
+                    pass
+
+                # fuzzy linking based on tags
+                q_link = """
+                UNWIND $rows AS r
+                WITH r, split(coalesce(r.tags, ''), ',') AS tags
+                UNWIND tags AS tag
+                WITH r, trim(tag) AS clean_tag
+                WHERE size(clean_tag) > 3
+                MATCH (i:Indicator {id: r.id})
+                MATCH (m:Malware)
+                WHERE toLower(m.name) = toLower(clean_tag)
+                   OR toLower(m.name) CONTAINS toLower(clean_tag)
+                   OR toLower(clean_tag) CONTAINS toLower(m.name)
+                MERGE (i)-[rel:INDICATES]->(m)
+                SET rel.method = 'fuzzy_match', rel.matched_tag = clean_tag
+                RETURN count(rel) AS cnt
+                """
+                try:
+                    self.run_query_with_result(q_link, desc=f"Linking Indicators (batch {url_count // 500 + 1})", params={"rows": batch})
+                except Exception:
+                    pass
+
+                url_count += len(batch)
+        else:
+            print(f"    [!] Error: URLHaus CSV not found at {urlhaus_path}")
 
         # 6. Semantic Linking
         print("\n=== [6/6] Semantic Linking: KEV <-> MITRE ===")

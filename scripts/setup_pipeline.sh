@@ -23,6 +23,11 @@ if [ ! -f ".env" ]; then
     exit 1
 fi
 
+# Load environment variables from .env for cypher-shell authentication
+set -o allexport
+source .env
+set +o allexport
+
 # 💡 권한 관련 참고: Neo4j 컨테이너(Docker)를 사용할 경우, 볼륨 매핑된 폴더의 소유권이 
 # Neo4j 기본 유저(ID: 7474)로 변경될 수 있습니다. 이를 현재 유저로 다시 조정합니다.
 echo -e "${YELLOW}[System] Checking directory permissions...${NC}"
@@ -40,6 +45,12 @@ if [ "$EUID" -ne 0 ]; then
     sudo chown -R "${CUR_UID}:${CUR_GID}" data/ 2>/dev/null || echo "Warning: chown failed or sudo required."
 else
     chown -R "${CUR_UID}:${CUR_GID}" data/ 2>/dev/null || true
+fi
+echo -e "\n[Info] Restoring host ownership for 'data/' to current user..."
+if [ "$EUID" -ne 0 ]; then
+     sudo chown -R "${CUR_UID}:${CUR_GID}" data/ 2>/dev/null || echo "[Warn] chown failed or sudo required."
+else
+     chown -R "${CUR_UID}:${CUR_GID}" data/ 2>/dev/null || true
 fi
 chmod -R 755 data/
 echo -e "  - Ownership set to ${CUR_UID}:${CUR_GID} and permissions updated to 755 for data directories."
@@ -67,6 +78,26 @@ python scripts/etl/preprocess_urlhaus.py
 # 2. DB 초기화 (스키마 설정)
 # ------------------------------------------------------------------------------
 echo -e "\n${GREEN}[Phase 2] Initializing Neo4j Database...${NC}"
+
+# Verify required processed CSVs exist before initializing DB
+REQUIRED_FILES=(
+    "data/processed/mitre_nodes.csv"
+    "data/processed/mitre_rels.csv"
+    "data/processed/cisa_kev_clean.csv"
+    "data/processed/urlhaus_indicators.csv"
+)
+MISSING=0
+for f in "${REQUIRED_FILES[@]}"; do
+    if [ ! -f "$f" ]; then
+        echo -e "[Error] Required file missing: $f"
+        MISSING=1
+    fi
+done
+if [ "$MISSING" -eq 1 ]; then
+    echo -e "${RED}[Fatal] One or more required CSVs are missing in data/processed.\nPlease run preprocessing scripts (scripts/etl/*.py) or download data before initializing the DB.${NC}"
+    exit 1
+fi
+
 python scripts/setup/init_db.py
 
 # ------------------------------------------------------------------------------
@@ -148,6 +179,40 @@ if [ -f "$INCIDENT_FILE" ]; then
 else
     echo -e "${YELLOW}No incident file found at $INCIDENT_FILE. Skipping ingestion.${NC}"
 fi
+
+# ----------------------------------------------------------------------------
+# 4.5 Ensure fulltext index exists (nodesFullText)
+# ----------------------------------------------------------------------------
+echo -e "\n${GREEN}[Phase 4.5] Ensuring fulltext index 'nodesFullText' exists...${NC}"
+CONTAINER_NAME="neo4j-cyber"
+FT_INDEX_NAME="nodesFullText"
+FT_CREATE_CMD="CREATE FULLTEXT INDEX ${FT_INDEX_NAME} IF NOT EXISTS FOR (n:BaseNode|Incident|Indicator|Malware|Vulnerability) ON EACH [n.name, n.value, n.url, n.cve_id, n.indicator, n.description];"
+
+exists=0
+for i in {1..3}; do
+    docker exec -i ${CONTAINER_NAME} cypher-shell -u "$NEO4J_USER" -p "$NEO4J_PASSWORD" "SHOW FULLTEXT INDEXES;" | grep -i "${FT_INDEX_NAME}" >/dev/null 2>&1 && exists=1 && break
+    if [ $i -eq 1 ]; then
+        echo -e "  - Fulltext index '${FT_INDEX_NAME}' not found. Creating..."
+        docker exec -i ${CONTAINER_NAME} cypher-shell -u "$NEO4J_USER" -p "$NEO4J_PASSWORD" "${FT_CREATE_CMD}"
+    else
+        echo -e "  - Waiting for index to appear (attempt ${i})..."
+    fi
+    sleep 3
+done
+
+if [ $exists -eq 0 ]; then
+    echo -e "  - Verifying index creation..."
+    # wait until populationPercent reaches 100 or timeout
+    for j in {1..20}; do
+        out=$(docker exec -i ${CONTAINER_NAME} cypher-shell -u "$NEO4J_USER" -p "$NEO4J_PASSWORD" "SHOW FULLTEXT INDEXES;" 2>/dev/null | grep -i "${FT_INDEX_NAME}" || true)
+        if [ -n "$out" ]; then
+            echo -e "  - Index '${FT_INDEX_NAME}' detected: $out"
+            break
+        fi
+        sleep 3
+    done
+fi
+
 
 # Ensure files are owned by current user after pipeline (Neo4j may have created files as uid 7474)
 if command -v id >/dev/null 2>&1; then
