@@ -55,6 +55,8 @@ with st.sidebar:
     
     depth = st.slider("Analysis Depth", 1, 3, 2, 
                       help="1: 직접 연결, 2: 간접 연결(IOC/Vuln), 3: 심층 연결(TTP 공유)")
+    include_incidents = st.checkbox("Include Incidents DB", value=True, help="Incident 기록을 포함하여 연관성을 찾습니다.")
+    looseness = st.slider("Looseness (fuzziness)", 0, 100, 30, help="높을수록 느슨한(퍼지/부분) 매칭을 허용합니다.")
     
     st.divider()
     
@@ -130,8 +132,15 @@ if not st.session_state.artifacts:
         st.markdown("##### 💡 Quick Start")
         if st.button("Load Example (Lazarus Campaign)"):
             st.session_state.artifacts = [
-                {"type": "Malware", "value": "Manuscrypt"},
-                {"type": "Vulnerability", "value": "CVE-2021-44228"}
+                {"type": "Indicator", "value": "101.35.56.7"},
+                {"type": "Indicator", "value": "zddtxxyxb.zip"},
+                {"type": "Indicator", "value": "http://101.43.166.60:8888/02.08.2022.exe"},
+                {"type": "Vulnerability", "value": "CVE-2025-21739"},
+                {"type": "Indicator", "value": "101.126.11.168"},
+                {"type": "Vulnerability", "value": "CVE-2025-11371"},
+                {"type": "Indicator", "value": "http://1.64.40.207/Photo.scr"},
+                {"type": "Indicator", "value": "eznoted2b1405e.zip"},
+                {"type": "Malware", "value": "Amadey"}
             ]
             st.rerun()
 
@@ -143,7 +152,9 @@ else:
             try:
                 results, ai_analysis = correlation.run_correlation_analysis(
                     st.session_state.artifacts, 
-                    depth=depth
+                    depth=depth,
+                    looseness=looseness,
+                    include_incidents=include_incidents
                 )
                 
                 st.success("Analysis Complete!")
@@ -153,16 +164,23 @@ else:
                 st.markdown("### 🕸️ Knowledge Graph Matches")
                 if results:
                     df = pd.DataFrame(results)
-                    df_display = df[['label', 'type', 'score', 'percent', 'matches']]
-                    df_display.columns = ['Suspect Group/Entity', 'Type', 'Match Score', 'Confidence(%)', 'Evidence Path']
+
+                    # Create a new DataFrame for display to avoid SettingWithCopyWarning
+                    df_display = pd.DataFrame({
+                        'Suspect Group/Entity': df['label'],
+                        'Type': df['type'],
+                        'Match Score': df['score'].round(2),
+                        'Confidence(%)': df['percent'].round(2),
+                        'Evidence Path': df['matches']
+                    })
                     
                     try:
                         st.dataframe(
                             df_display.style.background_gradient(subset=['Match Score'], cmap="Reds"),
-                            use_container_width=True
+                            width='stretch'
                         )
                     except:
-                        st.dataframe(df_display, use_container_width=True)
+                        st.dataframe(df_display, width='stretch')
                 else:
                     st.warning("No strong correlations found with the current database.")
                     
