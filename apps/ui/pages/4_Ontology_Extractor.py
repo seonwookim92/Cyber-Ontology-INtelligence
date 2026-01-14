@@ -20,7 +20,7 @@ NODE_STYLES = {
     # Intelligence Category Styles
     "Incident": {"color": "#FF2B2B", "shape": "hexagon", "size": 40},
     "MalwareReport": {"color": "#D32DFF", "shape": "dot", "size": 35},
-    "ThreatReport": {"color": "#1A1A1A", "shape": "star", "size": 35},
+    "ThreatReport": {"color": "#00FFF2", "shape": "star", "size": 35},
     "VulnerabilityReport": {"color": "#FF9F1C", "shape": "triangle", "size": 35},
     
     # Common Nodes
@@ -192,22 +192,7 @@ with col_output:
                 width="100%",
                 height=600,
                 directed=True,
-                physics={
-                    "enabled": True,
-                    "solver": "forceAtlas2Based",
-                    "forceAtlas2Based": {
-                        "gravitationalConstant": -50,
-                        "centralGravity": 0.01,
-                        "springLength": 100,
-                        "springConstant": 0.08
-                    },
-                    "minVelocity": 0.75,
-                    "stabilization": {
-                        "enabled": True,
-                        "iterations": 200, 
-                        "updateInterval": 25
-                    }
-                },
+                physics=True,
                 node={"labelProperty": "label"},
                 backgroundColor="#212529"
             )
