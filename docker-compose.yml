@@ -4,35 +4,42 @@ services:
   neo4j:
     image: neo4j:${NEO4J_VERSION}
     container_name: neo4j-cyber
+
     ports:
-      - "${NEO4J_HTTP_PORT}:7474" # 브라우저 UI (http://localhost:7474)
-      - "${NEO4J_BOLT_PORT}:7687" # Python 드라이버 접속용
+      - "${NEO4J_HTTP_PORT}:7474"   # Neo4j Browser
+      - "${NEO4J_BOLT_PORT}:7687"   # Bolt (driver / cypher-shell)
+
     volumes:
-      # [데이터 영속성] 컨테이너가 꺼져도 DB 데이터는 로컬에 남도록 설정
+      # 데이터 영속성
       - ./neo4j_data:/data
       - ./neo4j_logs:/logs
-      
-      # [핵심] 로컬의 'data/processed' 폴더를 컨테이너 내부의 'import' 폴더와 연결
-      # Python ETL 스크립트가 여기다 CSV를 넣으면 Neo4j가 바로 읽음
+
+      # CSV import 용
       - ./data/processed:/var/lib/neo4j/import
-      
-      # (선택) 커스텀 플러그인을 직접 넣을 경우를 대비
+
+      # 플러그인 (APOC만 사용)
       - ./plugins:/plugins
+
     environment:
-      # 초기 비밀번호 설정
+      # ===== 기본 인증 =====
       - NEO4J_AUTH=${NEO4J_USER}/${NEO4J_PASSWORD}
-      
-      # 필수 플러그인 자동 설치 (APOC: 유틸리티, GDS: 그래프 분석 알고리즘)
-      # For Neo4j 5.x use NEO4JLABS_PLUGINS
-      - NEO4JLABS_PLUGINS=["apoc", "graph-data-science"]
-      # Accept license for lab plugins when required
+
+      # ===== 네트워크 (Neo4j 5.x 필수) =====
+      - NEO4J_server_http_listen__address=0.0.0.0:7474
+      - NEO4J_server_bolt_listen__address=0.0.0.0:7687
+      - NEO4J_server_bolt_advertised__address=localhost:7687
+
+      # ===== 플러그인 =====
+      # ⚠️ GDS 제거 (Neo4j 5.19 Community와 호환 안 됨)
+      - NEO4J_PLUGINS=["apoc"]
       - NEO4J_ACCEPT_LICENSE_AGREEMENT=yes
-      
-      # APOC 보안 설정 완화 (파일 읽기/쓰기 등을 위해 필요)
-      - NEO4J_dbms_security_procedures_unrestricted=apoc.*,gds.*
-      - NEO4J_dbms_security_procedures_allowlist=apoc.*,gds.*
-      
-      # 메모리 설정 (필요 시 조정, 현재는 기본값 사용)
-      - NEO4J_dbms_memory_heap_initial__size=512m
-      - NEO4J_dbms_memory_heap_max__size=2G
+
+      # ===== APOC 권한 =====
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+      - NEO4J_dbms_security_procedures_allowlist=apoc.*
+
+      # ===== 메모리 =====
+      - NEO4J_server_memory_heap_initial__size=512m
+      - NEO4J_server_memory_heap_max__size=2G
+
     restart: unless-stopped
