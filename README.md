@@ -9,16 +9,16 @@ COIN is a platform that transforms fragmented and unstructured cyber threat data
 ## ✨ Key Features
 
 1.  **Deep Analysis**: Performs in-depth profiling of specific entities like Threat Groups, Malware, and Vulnerabilities, generating AI-powered reports based on graph data.
-2.  **Correlation**: Traces hidden connections between disparate IoCs (IPs, Hashes, URLs) to identify the threat actors or campaigns behind them.
-3.  **Graph Analysis**: Visually explores attack scenarios (Incidents) step-by-step, tracking the kill chain from initial access to final impact.
-4.  **Ontology Extractor**: Automatically structures unstructured CTI reports (text) into a formal ontology (Incident -> Step -> Entity) using LLMs and Regex, ready for graph ingestion.
-5.  **Smart Agent (Chatbot)**: An AI analyst that understands natural language, queries the knowledge graph in real-time, and provides context-aware answers about complex threat relationships.
+2.  **Correlation**: Traces hidden connections between disparate IoCs (IPs, Hashes, URLs) to identify the threat actors or campaigns behind them using Graph algorithms.
+3.  **Graph Analysis (Scenario Explorer)**: Visually explores attack scenarios (Incidents) step-by-step, tracking the kill chain from initial access to final impact.
+4.  **Ontology Extractor**: Automatically structures unstructured CTI reports (text) into a formal ontology (Incident -> Step -> Entity) using LLMs, ready for graph ingestion.
+5.  **Smart Agent (AI Analyst)**: A proactive AI analyst that understands natural language (**Korean/English**), queries the knowledge graph in real-time, and provides context-aware answers about complex threat relationships.
 
 ---
 
 ## 🏗️ Architecture
 
-The system follows a modular architecture separating the Data, Backend, and Application layers. All components are designed to work together to provide a comprehensive intelligence lifecycle.
+The system follows a modular architecture separating the Data, Backend, and Application layers.
 
 ```mermaid
 graph TD
@@ -38,15 +38,17 @@ graph TD
         
         S1 & S2 & S3 --> ETL
         S4 --> Processor
-        Processor -- "Extraction & Structuring" --> LLM
+        Processor -- "Uses" --> LLM
     end
 
     subgraph "Knowledge Base"
         Neo4j[(Neo4j Graph DB)]
+        Plugins[APOC / GDS Plugins]
+        Neo4j --- Plugins
     end
 
     ETL --> Neo4j
-    Processor -- "Ingests Structured Graph" --> Neo4j
+    Processor -- "Ingests Graph" --> Neo4j
 
     subgraph "Core Services (Backend)"
         direction TB
@@ -86,47 +88,41 @@ graph TD
 cyber-ontology/
 ├── apps/                 # Application Entry Points
 │   ├── cli/              # Command Line Interface
-│   │   └── main.py
-│   ├── mcp/              # MCP Tool Server
-│   │   └── server_neo4j.py
+│   ├── mcp/              # MCP Tool Server (for Desktop LLMs like Claude)
 │   └── ui/               # Streamlit Web Dashboard
-│       ├── Home.py       # System Dashboard & Navigation
-│       └── pages/        # UI Pages for each feature
+│       ├── Home.py       # System Dashboard & Metrics
+│       └── pages/        # Interactive Analysis Pages
 │           ├── 1_Deep_Analysis.py
 │           ├── 2_Correlation.py
 │           ├── 3_Graph_Analysis.py
 │           ├── 4_Ontology_Extractor.py
 │           └── 5_Smart_Agent.py
-├── src/                  # Core Business Logic
-│   ├── core/             # Config, DB Client, Pydantic Schemas
-│   │   ├── config.py
-│   │   ├── graph_client.py
-│   │   ├── prompts.py
-│   │   └── schemas.py
-│   ├── services/         # Business Logic Services
-│   │   ├── agent.py
-│   │   ├── analysis.py
-│   │   ├── correlation.py
-│   │   └── intelligence_processor.py
-│   └── tools/            # Modular LangChain Tools for the Agent
-│       └── neo4j.py
-├── data/                 # Data Storage
-│   ├── raw/              # Original downloaded data
-│   ├── seed/             # Seed data for scenario generation (Organizations)
-│   ├── processed/        # Preprocessed data for Neo4j import
-│   └── generated/        # AI-generated incident data
-├── scripts/              # Automation & Setup Scripts
-│   ├── etl/              # ETL pipelines (Raw -> Processed)
+├── src/                  # Core Source Code
+│   ├── core/             # Configuration, Database Clients, Schemas, Prompts
+│   ├── services/         # Core Logic (Analysis, Correlation, Extraction, Agent)
+│   ├── tools/            # LangChain/LangGraph Tools for Agent
+│   └── utils/            # Helper utilities (Logger, etc.)
+├── scripts/              # Automation Scripts
+│   ├── etl/              # Data Processing Pipelines
 │   │   ├── preprocess_mitre.py
+│   │   ├── preprocess_kev.py
+│   │   ├── preprocess_urlhaus.py
 │   │   └── process_incidents.py
-│   └── setup/            # Initial setup scripts
-│       ├── bootstrap.sh
-│       ├── generate_incidents.py
-│       └── init_db.py
-├── .env.example          # Environment variable template
-├── docker-compose.yml    # Docker configuration for Neo4j
-├── pyproject.toml
-└── requirements.txt      # Python Dependencies
+│   ├── setup/            # Initialization Scripts
+│   │   ├── download_cisa_kev.sh
+│   │   ├── download_mitre_attack.sh
+│   │   ├── download_urlhaus_online_csv.sh
+│   │   ├── generate_incidents.py
+│   │   └── init_db.py
+│   ├── debug/            # Diagnostic scripts
+│   └── setup_pipeline.sh # Master Master script for full setup
+├── data/                 # Data storage (Raw/Processed/Generated)
+├── schema/               # Neo4j Cypher Schema & Seed files
+├── plugins/              # Neo4j Plugins (APOC, GDS)
+├── docker-compose.yml    # Neo4j Container Configuration
+├── requirements.txt      # Python Dependencies
+├── test_agent.py         # Agent functional test
+└── test_backend.py       # Backend service test
 ```
 
 ---
@@ -135,102 +131,111 @@ cyber-ontology/
 
 ### 1. Prerequisites
 
-*   **Python 3.10+**
-*   **Docker** and **Docker Compose**
-*   **Ollama** (for local LLM) or an **OpenAI API Key**
+*   **Python 3.10+** (Recommend using `conda` or `venv`)
+*   **Docker & Docker Compose** (For Neo4j Graph DB)
+*   **Ollama** (Local LLM) or **OpenAI API Key** (Cloud LLM)
 
-### 2. Environment Setup
+### 2. Installation
 
-Clone the repository and set up the Python virtual environment.
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/seonwookim92/Cyber-Ontology-INtelligence.git
+   cd Cyber-Ontology-INtelligence
+   ```
 
-```bash
-git clone https://github.com/your-username/cyber-ontology.git
-cd cyber-ontology
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
+2. Setup virtual environment:
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+   pip install -r requirements.txt
+   ```
 
 ### 3. Configuration
 
-Copy the example `.env` file and update it with your Neo4j and LLM credentials.
+Copy `.env.example` to `.env` and fill in your credentials.
 
 ```bash
 cp .env.example .env
 ```
 
-Then, edit `.env` with your details:
+Key environment variables:
 ```ini
+# Neo4j
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
-NEO4J_PASSWORD=your_secret_password
-LLM_PROVIDER=ollama  # or openai
-OLLAMA_MODEL=llama3.1 # if using ollama
-OPENAI_API_KEY=sk-... # if using openai
+NEO4J_PASSWORD=password1234!
+
+# LLM Selection
+LLM_PROVIDER=ollama  # choices: [ollama, openai]
+OLLAMA_MODEL=llama3.1
+OPENAI_API_KEY=sk-... # required if LLM_PROVIDER is openai
 ```
 
-### 4. Launch Services
+### 4. Running the Pipeline
 
-Start the Neo4j database container in the background.
+COIN requires a multi-step data pipeline to populate the Knowledge Graph. We provide a master script to automate this:
 
-```bash
-docker-compose up -d
-```
+1. Start Neo4j:
+   ```bash
+   docker-compose up -d
+   ```
 
-> **Note:** If you are using a local LLM, ensure your Ollama service is running (`ollama serve`).
-
-### 5. Data Pipeline Execution
-
-Run the master script to download datasets, preprocess them, and populate the Neo4j database. This script will guide you through the incident data setup.
-
-```bash
-# Grant execution permission
-chmod +x scripts/setup_pipeline.sh
-
-# Run the full pipeline
-./scripts/setup_pipeline.sh
-```
+2. Run the Full Setup Pipeline:
+   ```bash
+   chmod +x scripts/setup_pipeline.sh
+   ./scripts/setup_pipeline.sh
+   ```
+   *This script will: Download MITRE/KEV/URLHaus data -> Preprocess to CSV -> Initialize Neo4j Schema -> Ingest Intelligence Base -> (Optionally) Generate AI attack scenarios.*
 
 ---
 
 ## 🖥️ Usage
 
-### GUI (Recommended)
+### Web Dashboard (GUI) - **Recommended**
 
-The primary way to use COIN is through the Streamlit web dashboard, which provides access to all features.
+The unified dashboard provides access to all COIN features visually.
 
 ```bash
 streamlit run apps/ui/Home.py
 ```
 
-1.  **Ingest Data**: Go to `4_Intelligence_Processing`, paste a raw CTI report, and click **Analyze**. Review the extracted graph and click **Ingest into Neo4j**.
-2.  **Analyze Context**: Use the `3_Scenario_Explorer` to see how the attack unfolded step-by-step.
-3.  **Chat with Agent**: Open `5_Smart_Agent` and ask: *"CVE-2025-55182에 대해 알려줘. 어떤 사건이랑 연관되어 있어?"*
+*   **Dashboad (Home)**: View system health (LLM/DB) and total intelligence metrics.
+*   **Deep Analysis**: Profile groups like "Lazarus" or "APT28" and generate AI summaries.
+*   **Correlation**: Input an IoC (like `http://103.212.69.118`) to find related malware or actors.
+*   **Graph Analysis**: Explore chronological attack steps of realistic incidents.
+*   **Ontology Extractor**: Paste a raw text report to extract a structured graph.
+*   **Smart Agent**: Chat with the graph in **Korean** or **English**.
 
-### CLI (Limited Features)
-
-A command-line interface is also available for core analysis functions.
+### CLI
 
 ```bash
 python apps/cli/main.py
 ```
-The CLI supports the following features:
-*   **Deep Analysis** (Feature 1)
-*   **Correlation** (Feature 2)
-*   **Smart Agent** (Feature 5)
+
+---
+
+## 🧪 Testing
+
+You can verify the backend connectivity and agent logic using the test scripts:
+
+```bash
+# Test Neo4j connection and basic services
+python test_backend.py
+
+# Test Smart Agent reasoning and Cypher tool usage
+python test_agent.py
+```
 
 ---
 
 ## 🛡️ Roadmap
 
-### Completed
-* [x] Migration to Neo4j Property Graph Model
-* [x] Unstructured CTI Report Processor (Text-to-Graph)
-* [x] Context-Aware Autonomous Agent (Incident-Step-Entity Tracing)
-* [x] Entity Grounding & Normalization Logic
-
-### Planned
+* [x] Neo4j Property Graph Migration (STIX-based)
+* [x] Autonomous Agent (LangGraph) with Cypher Tooling
+* [x] Semantic Linking (KEV <-> MITRE mapping)
+* [x] Streamlit Multi-Page UI
 * [ ] Live Data Integration via Multi-Modal MCP Server
+* [ ] Graph-based Fraud/Anomaly Detection Algorithms
 
 ---
 
