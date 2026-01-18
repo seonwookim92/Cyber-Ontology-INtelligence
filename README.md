@@ -151,6 +151,46 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+#### Downloading Ghidra
+
+Ghidra must be installed to run Integrated Threat Correlation Analysis.
+Get ghidra_12.0_PUBLIC from GHIDRA(https://github.com/NationalSecurityAgency/ghidra/releases) GITHUB site and put it under codeCategorize_min/Binary folder.
+
+If you use ARM processor, run
+
+```bash
+codeCategorize_min/Binary/ghidra_12.0_PUBLIC/support/gradle/gradlew buildNatives
+```
+
+to build architecture dependent decopiler & demangler.
+
+#### Downloading vbSparkle
+
+vbSparkle.CLI must be provided under codeCategorize_min/VBS folder as a standalone program.
+
+vbSparkle.CLI can be built using https://github.com/airbus-cert/vbSparkle project. Clone it and build it using
+
+```bash
+cd Sources/vbSparkle.CLI
+dotnet publish -c Release -r <Architecture> --self-contained true /p:PublishingSingleFile=true
+```
+command. 
+
+For example, if you use linux aarch64, you can put 'linux-arm64' in Architecture option.
+
+#### Downloading invoke-deobfuscation
+
+invoke-deobfuscation must be provided under codeCategorize_min/Powershell folder as a whole project.
+
+You can clone the whole project under the path by using command
+
+```bash
+git clone https://gitee.com/snowroll/invoke-deobfuscation
+```
+
+#### Downloading 
+
+
 ### 3. Configuration
 
 Copy the example `.env` file and update it with your Neo4j and LLM credentials.
