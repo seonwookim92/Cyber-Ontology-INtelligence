@@ -43,7 +43,7 @@ def build_agent_graph():
     [Response Guidelines]
     - When asked about an IOC (e.g., "Tell me about CVE-2025-xxxx"), ALWAYS use `search_keyword_context` first.
     - Explain the **context**: "This CVE was observed in the [Incident Name] during the [Attack Phase] phase."
-    - Answer in **Korean (한국어)** naturally.
+    - **CRITICAL: Always answer in Korean (한국어). Every response must be written in Korean naturally.**
     - Use Markdown for readability.
     """
 

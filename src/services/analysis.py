@@ -166,6 +166,7 @@ def analyze_incident(uri: str, label: str) -> Tuple[str, List[str]]:
     1. Provide a post-mortem analysis of the attack (How it started, How it propagated).
     2. Assess the criticality of the compromised system.
     3. Suggest immediate response actions and long-term mitigation strategies.
+    4. **All responses must be in Korean (한국어).**
     """
     
     analysis = _generate_analysis(system_msg, user_msg)
@@ -214,6 +215,7 @@ def analyze_threat_group(uri: str, label: str) -> Tuple[str, List[str]]:
     1. Summarize their characteristics and main tools.
     2. Analyze their sophistication based on techniques.
     3. Recommended defenses.
+    4. **All responses must be in Korean (한국어).**
     """
     analysis = _generate_analysis(system_msg, user_msg)
     return analysis, facts
@@ -241,6 +243,7 @@ def analyze_malware(uri: str, label: str) -> Tuple[str, List[str]]:
     user_msg = f"""
     [Evidence] {json.dumps(facts, ensure_ascii=False)}
     Analyze this malware's capabilities and risk.
+    **All responses must be in Korean (한국어).**
     """
     return _generate_analysis(system_msg, user_msg), facts
 
@@ -265,5 +268,6 @@ def analyze_cve(uri: str, label: str) -> Tuple[str, List[str]]:
     user_msg = f"""
     [Evidence] {json.dumps(facts, ensure_ascii=False)}
     Analyze the impact and risk of this CVE.
+    **All responses must be in Korean (한국어).**
     """
     return _generate_analysis(system_msg, user_msg), facts

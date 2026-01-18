@@ -391,6 +391,7 @@ The following is a raw list of potential connections found in the knowledge grap
 3.  **Synthesize, Don't Just List**: Do not simply list the findings. Weave them into a coherent narrative that explains the relationship between the artifacts and the threat actor.
 4.  **Confidence Level**: State your confidence level (e.g., High, Medium, Low) and briefly explain what would be needed to increase it.
 5.  **DO NOT Include**: Do not provide mitigation advice, recommendations, or generic descriptions of the threat group. Focus *only* on the evidence-based attribution.
+6.  **Language Requirement**: **All responses must be in Korean (한국어).** 
 
 Begin your report now.
 """
