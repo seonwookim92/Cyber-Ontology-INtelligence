@@ -104,6 +104,40 @@ def reset_graph():
     st.session_state.store_edges = []
     st.session_state.incident_timeline = []
 
+def fetch_node_details(node_id):
+    """DB에서 노드의 상세 속성을 가져옴"""
+    q = ""
+    params = {}
+    
+    if node_id.startswith("incident--"):
+        q = "MATCH (n:Incident {id: $id}) RETURN n"
+        params = {"id": node_id}
+    elif node_id.startswith("VIC_"):
+        inc_id = node_id.replace("VIC_", "")
+        q = "MATCH (:Incident {id: $inc_id})-[:TARGETS]->(n:Identity) RETURN n"
+        params = {"inc_id": inc_id}
+    elif node_id.startswith("ACT_"):
+        q = "MATCH (n:ThreatGroup) WHERE n.name = $val OR n.mitre_id = $val RETURN n"
+        params = {"val": node_id.replace("ACT_", "")}
+    elif node_id.startswith("MAL_"):
+        q = "MATCH (n:Malware {name: $val}) RETURN n"
+        params = {"val": node_id.replace("MAL_", "")}
+    elif node_id.startswith("CVE_"):
+        q = "MATCH (n:Vulnerability {cve_id: $val}) RETURN n"
+        params = {"val": node_id.replace("CVE_", "")}
+    elif node_id.startswith("IOC_"):
+        q = "MATCH (n:Indicator {url: $val}) RETURN n"
+        params = {"val": node_id.replace("IOC_", "")}
+    else:
+        # Step 등의 노드
+        q = "MATCH (n) WHERE n.id = $id OR id(n) = $id_int RETURN n"
+        params = {"id": node_id}
+        try: params["id_int"] = int(node_id)
+        except: params["id_int"] = -1
+
+    res = graph_client.query(q, params)
+    return res[0]['n'] if res else None
+
 # ==============================================================================
 # 2. Core Logic: Merge Incident Subgraph
 # ==============================================================================
@@ -376,6 +410,25 @@ with col2:
                         st.warning("No new connections found.")
             else:
                 st.caption("No actions available for this node.")
+
+            # --- [신규] 노드 세부 정보 출력 ---
+            with st.expander("📄 Node Details", expanded=True):
+                details = fetch_node_details(selected_node_id)
+                if details:
+                    # 중요 정보를 상단에 표시
+                    main_keys = ['name', 'title', 'cve_id', 'url', 'phase', 'description', 'summary']
+                    for k in main_keys:
+                        if k in details and details[k]:
+                            st.markdown(f"**{k.capitalize()}:**")
+                            st.write(details[k])
+                    
+                    # 나머지 모든 속성 표 형식으로 표시
+                    other_props = {k: v for k, v in details.items() if k not in main_keys and v}
+                    if other_props:
+                        st.markdown("---")
+                        st.json(other_props)
+                else:
+                    st.warning("Could not fetch detailed properties from database.")
         else:
             st.info("노드를 클릭하여 탐색하세요.")
 
