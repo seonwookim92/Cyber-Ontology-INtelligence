@@ -132,13 +132,24 @@ def run_correlation_analysis(
         exact_cond = f"toLower({_coalesce_fields('candidate')}) = toLower('{safe_val}')"
         contains_cond = f"toLower({_coalesce_fields('candidate')}) CONTAINS toLower('{safe_val}')"
 
-        # exact match
+        # exact match (Priority 1)
         sub_queries.append(f"""
             MATCH (candidate)
-            WHERE {exact_cond}
-            RETURN coalesce(candidate.name, candidate.cve_id, candidate.url, candidate.value) AS label, labels(candidate)[0] AS type, 0 AS dist,
-                   ['ExactMatch:' + coalesce(candidate.name, candidate.cve_id, candidate.url, candidate.value)] AS matches
-            LIMIT 200
+            WHERE toLower({_coalesce_fields('candidate')}) = toLower('{safe_val}')
+            RETURN coalesce(candidate.name, candidate.cve_id, candidate.url, candidate.value, candidate.title) AS label, 
+                   labels(candidate)[0] AS type, 0 AS dist,
+                   ['ExactMatch:' + coalesce(candidate.name, candidate.cve_id, candidate.url, candidate.value, candidate.title)] AS matches
+            LIMIT 100
+        """)
+
+        # contains match (Priority 2) - Critical for URLs/Path fragments
+        sub_queries.append(f"""
+            MATCH (candidate)
+            WHERE toLower({_coalesce_fields('candidate')}) CONTAINS toLower('{safe_val}')
+            RETURN coalesce(candidate.name, candidate.cve_id, candidate.url, candidate.value, candidate.title) AS label, 
+                   labels(candidate)[0] AS type, 1 AS dist,
+                   ['PartialMatch:' + coalesce(candidate.name, candidate.cve_id, candidate.url, candidate.value, candidate.title)] AS matches
+            LIMIT 100
         """)
 
         # fulltext or contains fallback
@@ -162,14 +173,35 @@ def run_correlation_analysis(
         if not include_incidents:
             label_allow = label_allow.replace('|Incident', '')
 
+        # seed-driven expansion (deep correlation)
+        seed_match = f"toLower({_coalesce_fields('seed')}) CONTAINS toLower('{safe_val}')"
+        label_allow = "+(ThreatGroup|Campaign|Actor|Incident|Malware|Indicator|Vulnerability|AttackTechnique|Tool|Identity|AttackStep)"
+        if not include_incidents:
+            label_allow = label_allow.replace('|Incident', '').replace('|AttackStep', '')
+
+        # Focused relationship filter based on diagnostic successful paths
+        rel_filter = 'USES|INDICATES|RELATED_TO|CONNECTED|RELATED|ASSOCIATED_WITH|USES_MALWARE|EXPLOITS|HAS_INDICATOR|ATTRIBUTED_TO|TARGETS|STARTS_WITH|NEXT'
+
         sub_queries.append(f"""
             MATCH (seed)
             WHERE {seed_match}
-            CALL apoc.path.expandConfig(seed, {{relationshipFilter: 'USES>|INDICATES>|RELATED_TO>|CONNECTED>|RELATED>|ASSOCIATED_WITH>', labelFilter: '{label_allow}', maxLevel: {depth}, limit: 200}}) YIELD path
+            CALL apoc.path.expandConfig(seed, {{
+                relationshipFilter: '{rel_filter}', 
+                labelFilter: '{label_allow}', 
+                minLevel: 1,
+                maxLevel: {max(3, depth + 1)}, 
+                bfs: true,
+                limit: 200
+            }}) YIELD path
             WITH last(nodes(path)) AS candidate, path, length(path) AS dist
-            WHERE candidate IS NOT NULL
-            RETURN coalesce(candidate.name, candidate.cve_id, candidate.url, candidate.value) AS label, (CASE WHEN 'ThreatGroup' IN labels(candidate) THEN 'ThreatGroup' ELSE head(labels(candidate)) END) AS type, dist AS dist,
-                   [n IN nodes(path) | coalesce(n.name, n.cve_id, n.url, n.value)] AS matches
+            WHERE candidate:ThreatGroup OR candidate:Incident
+            RETURN coalesce(candidate.name, candidate.title, candidate.cve_id, candidate.url, candidate.value) AS label, 
+                   (CASE WHEN 'ThreatGroup' IN labels(candidate) THEN 'ThreatGroup' 
+                         WHEN 'Incident' IN labels(candidate) THEN 'Incident'
+                         ELSE head(labels(candidate)) END) AS type, 
+                   dist AS dist,
+                   [n IN nodes(path) | coalesce(n.name, n.title, n.cve_id, n.url, n.value)] AS matches
+            LIMIT 100
         """)
 
         if looseness >= 60:
@@ -185,101 +217,151 @@ def run_correlation_analysis(
         return [], "분석 가능한 아티팩트가 없거나, 선택된 심도(Depth)에서는 탐색 경로가 정의되지 않았습니다."
 
     # Execute queries and collect rows
-    rows: List[Dict[str, Any]] = []
+    raw_rows: List[Dict[str, Any]] = []
     for q in sub_queries:
         try:
             res = graph_client.query(q)
             if res:
                 for r in res:
-                    rows.append(r)
+                    raw_rows.append(r)
         except Exception as e:
-            rows.append({'label': None, 'type': 'QueryError', 'dist': 9999, 'matches': [f'QueryError: {str(e)}']})
+            raw_rows.append({'label': None, 'type': 'QueryError', 'dist': 9999, 'matches': [f'QueryError: {str(e)}']})
 
-    # Map non-ThreatGroup candidates to ThreatGroup(s) where possible
+    # Map non-ThreatGroup candidates to ThreatGroup(s) and collect all possible TG matches
+    tg_matches: List[Dict[str, Any]] = []
     tg_cache: Dict[str, List[str]] = {}
 
-    def _find_threatgroups_for_label(val: str) -> List[str]:
+    def _find_threatgroups_for_label(val: str, itype: str = None) -> List[str]:
+        """Memory-efficient resolution of ThreatGroups."""
         k = val or ''
-        if k in tg_cache:
-            return tg_cache[k]
-        # exact match first
-        q_exact = """
+        cache_key = f"{k}_{itype}"
+        if cache_key in tg_cache:
+            return tg_cache[cache_key]
+        
+        # If it's already an Incident, we just need its attribution
+        if itype == 'Incident':
+            q_inc = "MATCH (i:Incident) WHERE i.title = $val OR i.name = $val MATCH (i)-[:ATTRIBUTED_TO]-(tg:ThreatGroup) RETURN tg.name as tgname"
+            res = graph_client.query(q_inc, {"val": k})
+            tgs = [r['tgname'] for r in res if r.get('tgname')]
+            tg_cache[cache_key] = tgs
+            return tgs
+        
+        # Diagnostic-informed deep search through static TI and Incident paths
+        q_resolve = """
             MATCH (n)
-            WHERE toLower(coalesce(n.name,'') + ' ' + coalesce(n.value,'')) = toLower($val)
-            OPTIONAL MATCH (n)-[:INDICATES]->(m:Malware)<-[:USES]-(tg:ThreatGroup)
-            OPTIONAL MATCH (n)-[:ATTRIBUTED_TO]-(tg2:ThreatGroup)
-            OPTIONAL MATCH (tg3:ThreatGroup)-[:USES]->(n)
-            WITH collect(distinct tg.name) + collect(distinct tg2.name) + collect(distinct tg3.name) AS tgs
+            WHERE n.name = $val OR n.value = $val OR n.url = $val OR n.cve_id = $val OR n.title = $val
+               OR toLower(coalesce(n.name, '')) CONTAINS toLower($val)
+               OR toLower(coalesce(n.url, '')) CONTAINS toLower($val)
+            
+            WITH n LIMIT 5
+            OPTIONAL MATCH (n)-[:ATTRIBUTED_TO|INDICATES|RELATED_TO|USES*1..2]-(tg1:ThreatGroup)
+            
+            OPTIONAL MATCH (n)-[:STARTS_WITH|NEXT|HAS_INDICATOR|USES_MALWARE|EXPLOITS*1..3]-(i:Incident)
+            OPTIONAL MATCH (i)-[:ATTRIBUTED_TO]-(tg2:ThreatGroup)
+            
+            WITH collect(distinct tg1.name) + collect(distinct tg2.name) AS tgs
             UNWIND tgs AS tgname
-            RETURN DISTINCT tgname LIMIT 10
+            RETURN DISTINCT tgname LIMIT 15
         """
-        res = graph_client.query(q_exact, params={'val': k})
-        tgs = [r.get('tgname') or list(r.values())[0] for r in res] if res else []
-        if not tgs:
-            # try contains fallback
-            q_cont = """
-                MATCH (n)
-                WHERE toLower(coalesce(n.name,'') + ' ' + coalesce(n.value,'')) CONTAINS toLower($val)
-                OPTIONAL MATCH (n)-[:INDICATES]->(m:Malware)<-[:USES]-(tg:ThreatGroup)
-                OPTIONAL MATCH (n)-[:ATTRIBUTED_TO]-(tg2:ThreatGroup)
-                OPTIONAL MATCH (tg3:ThreatGroup)-[:USES]->(n)
-                WITH collect(distinct tg.name) + collect(distinct tg2.name) + collect(distinct tg3.name) AS tgs
-                UNWIND tgs AS tgname
-                RETURN DISTINCT tgname LIMIT 10
-            """
-            res = graph_client.query(q_cont, params={'val': k})
-            tgs = [r.get('tgname') or list(r.values())[0] for r in res] if res else []
-        tg_cache[k] = tgs
+        res = graph_client.query(q_resolve, params={'val': k})
+        tgs = [r.get('tgname') for r in res if r.get('tgname')] if res else []
+        tg_cache[cache_key] = tgs
         return tgs
 
-    # Scoring
-    formatted_results: List[Dict[str, Any]] = []
-    evidence_list: List[str] = []
-
-    for r in rows:
-        raw_score = r.get('raw_score', 0) or 0
+    for r in raw_rows:
+        r_type = (r.get('type') or '').strip()
+        label_val = r.get('label')
         dist = r.get('dist', 10) or 10
         matches = r.get('matches') or []
+        raw_score = r.get('raw_score', 0) or 0
 
-        # If this candidate is not a ThreatGroup, try to map to ThreatGroup(s)
-        r_type = (r.get('type') or '').strip()
-        if r_type != 'ThreatGroup':
-            label_val = r.get('label')
-            tgs = _find_threatgroups_for_label(label_val)
-            if tgs:
-                # create synthetic rows for each mapped ThreatGroup
-                for tg_name in tgs:
-                    synth = {
-                        'label': tg_name,
-                        'type': 'ThreatGroup',
-                        'dist': dist + 1,
-                        'matches': (matches if isinstance(matches, list) else [matches]) + [f'LinkedVia:{label_val}'],
-                        'raw_score': raw_score
-                    }
-                    rows.append(synth)
-                continue
-            # if no mapped TGs, skip this non-TG candidate
-            continue
+        if r_type == 'ThreatGroup':
+            tg_matches.append(r)
+        else:
+            tgs = _find_threatgroups_for_label(label_val, r_type)
+            for tg_name in tgs:
+                tg_matches.append({
+                    'label': tg_name,
+                    'type': 'ThreatGroup',
+                    'dist': dist + (1 if r_type == 'Incident' else 2),
+                    'matches': (matches if isinstance(matches, list) else [matches]) + [f'LinkedVia:{label_val}'],
+                    'raw_score': raw_score
+                })
 
+    # Aggregate by ThreatGroup to show multiple pieces of evidence
+    aggregated_tgs: Dict[str, Dict[str, Any]] = {}
+    for r in tg_matches:
+        label = r['label']
+        if not label: continue
+        
+        if label not in aggregated_tgs:
+            aggregated_tgs[label] = {
+                'label': label,
+                'type': 'ThreatGroup',
+                'min_dist': r['dist'],
+                'all_matches': set(),
+                'total_raw_score': 0,
+                'match_count': 0
+            }
+        
+        agg = aggregated_tgs[label]
+        agg['min_dist'] = min(agg['min_dist'], r['dist'])
+        agg['total_raw_score'] += r.get('raw_score', 0) or 0
+        agg['match_count'] += 1
+        
+        # Add matches to a set to avoid duplicates and gather all evidence
+        m_list = r.get('matches') or []
+        for m in (m_list if isinstance(m_list, list) else [m_list]):
+            agg['all_matches'].add(str(m))
+
+    # User input values for filtering evidence path
+    user_input_values = {str(a['value']).lower() for a in artifacts}
+
+    # Scoring and formatting
+    formatted_results: List[Dict[str, Any]] = []
+    evidence_summary_for_ai: List[str] = []
+
+    for label, agg in aggregated_tgs.items():
+        dist = agg['min_dist']
+        all_matches = sorted(list(agg['all_matches']))
+        
+        # Filter: Only keep matches that are in our original user input list
+        matched_clues = []
+        for m in all_matches:
+            # Check if this match string (or part of it for prefixed ones) is in our input set
+            m_clean = m.lower()
+            if ":" in m_clean: # Handle prefixes like 'ExactMatch:', 'LinkedVia:'
+                parts = m_clean.split(":", 1)
+                if len(parts) > 1 and parts[1] in user_input_values:
+                    # Find the original case-sensitive value if possible, or just use the part
+                    matched_clues.append(m.split(":", 1)[1])
+            elif m_clean in user_input_values:
+                matched_clues.append(m)
+        
+        # Deduplicate and sort matched clues
+        matched_clues = sorted(list(set(matched_clues)))
+        
         proximity_score = 1.0 / (1 + float(dist))
-        text_score = min(1.0, raw_score / max(1, len(artifacts)))
+        # Weight score by number of unique USER artifacts that hit this TG
+        breadth_score = min(1.0, len(matched_clues) / max(1, len(artifacts)))
+        
         provenance_weight = 1.0
-        if any('Incident' in str(m) or 'incident' in str(m) for m in matches):
+        if any('Incident' in str(m) or 'incident' in str(m) for m in all_matches):
             provenance_weight = 1.2
 
-        combined = (proximity_score * 0.6 + text_score * 0.3) * provenance_weight
+        # Combined score: Proximity tells us how close it is, breadth tells us how many artifacts hit it
+        combined = (proximity_score * 0.4 + breadth_score * 0.5 + min(0.1, agg['total_raw_score']/100)) * provenance_weight
         percent = min(round(combined * 100, 1), 100.0)
 
         formatted_results.append({
-            "type": r.get('type') or 'Unknown',
-            "label": r.get('label'),
+            "type": "ThreatGroup",
+            "label": label,
             "score": round(combined, 3),
             "percent": percent,
-            "matches": ' | '.join([str(x) for x in (matches if isinstance(matches, list) else [matches])]),
-            "uri": r.get('label')
+            "matches": ' | '.join(matched_clues) if matched_clues else "Indirect Link",
+            "uri": label
         })
-
-        evidence_list.append(f"Suspect: {r.get('label')} (RawMatches: {raw_score}) -> Reasons: {matches}")
+        evidence_summary_for_ai.append(f"ThreatGroup: {label} -> MatchedClues: {matched_clues}, FullPathEvidence: {all_matches}")
 
     if not formatted_results:
         return [], "조건에 맞는 위협 그룹을 찾지 못했습니다."
@@ -298,9 +380,9 @@ Your primary goal is to identify the most likely Threat Group responsible and bu
 - Analysis Parameters: Depth={depth}, Looseness={looseness}, Include Incidents={include_incidents}
 
 [Findings]
-The following is a raw list of potential connections found in the knowledge graph. 'Suspect' is a potential threat group, and 'Reasons' are the connection paths or evidence found.
+The following is a raw list of potential connections found in the knowledge graph. 'ThreatGroup' is the suspect, 'MatchedClues' are the user artifacts that triggered the match, and 'FullPathEvidence' shows the graph paths.
 ```json
-{json.dumps(evidence_list, indent=1)}
+{json.dumps(evidence_summary_for_ai, indent=1)}
 ```
 
 [Report Requirements]
