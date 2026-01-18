@@ -1,0 +1,23 @@
+# Core dependencies
+torch
+torch-geometric
+transformers
+fastapi
+uvicorn[standard]
+pydantic
+iocsearcher
+
+# File analysis
+python-magic
+pefile
+pygments
+
+# Frontend
+streamlit
+requests
+
+# MCP support (optional)
+fastapi-mcp
+
+# Platform-specific (uncomment if on Windows and python-magic doesn't work)
+# python-magic-bin==0.4.14

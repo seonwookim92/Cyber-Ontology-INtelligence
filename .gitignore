@@ -29,3 +29,10 @@ plugins/
 *.log
 
 .DS_Store
+
+#codeCategorize_min
+codeCategorize_min/.gitignore
+codeCategorize_min/Binary/ghidra_12.0_PUBLIC/
+codeCategorize_min/Binary/temp_projects
+codeCategorize_min/Powershell/invoke-deobfuscation/
+codeCategorize_min/VBS/vbSparkle.CLI

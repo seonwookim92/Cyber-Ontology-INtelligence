@@ -113,3 +113,13 @@ wheel==0.45.1
 xxhash==3.6.0
 yarl==1.22.0
 zstandard==0.25.0
+torch
+torch-geometric
+transformers
+fastapi
+uvicorn[standard]
+iocsearcher
+python-magic
+pefile
+fastapi-mcp
+pyghidra
