@@ -279,25 +279,9 @@ with st.sidebar:
         placeholder="e.g., Lazarus, CVE-2021-44228"
     )
     
+    
     st.button("Add to List", type="secondary", use_container_width=True, on_click=add_artifact)
-    
-    # --- 목록 표시 ---
-    st.markdown("---")
-    st.subheader(f"📋 Selected List ({len(st.session_state.artifacts)})")
-    
-    if not st.session_state.artifacts:
-        st.caption("No artifacts added yet.")
-    else:
-        for i, art in enumerate(st.session_state.artifacts):
-            with st.container(border=True):
-                c1, c2 = st.columns([5, 1])
-                with c1:
-                    st.markdown(f"**{art['type']}**")
-                    st.code(art['value'], language=None)
-                with c2:
-                    if st.button("🗑️", key=f"del_{i}"):
-                        st.session_state.artifacts.pop(i)
-                        st.rerun()
+
 
 # ==============================================================================
 # 2. 메인 화면: 분석 실행 및 결과
@@ -324,7 +308,85 @@ if not st.session_state.artifacts:
             st.rerun()
 
 else:
-    st.subheader("2️⃣ Analysis Results")
+    # --- Added: Tag-style display of selected artifacts ---
+    col_header, col_clear = st.columns([5, 1])
+    with col_header:
+        st.markdown("##### 📍 Active Clues (Click to remove)")
+    with col_clear:
+        if st.button("Clear All", type="tertiary", use_container_width=True):
+            st.session_state.artifacts = []
+            st.rerun()
+    
+    # Custom CSS for high-fidelity 3D pill tags + Horizontal Flow Fix
+    st.markdown("""
+        <style>
+        /* 1. Force Streamlit's horizontal block (columns) to wrap */
+        div[data-testid="stHorizontalBlock"] {
+            flex-wrap: wrap !important;
+            gap: 10px !important;
+        }
+
+        /* 2. Ensure each column only takes as much space as needed for the tag */
+        div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {
+            width: auto !important;
+            min-width: min-content !important;
+            flex: 0 1 auto !important;
+        }
+
+        /* 3. High-Fidelity 3D Pill Style */
+        div.stButton > button[id*="tag_"] {
+            border-radius: 50px !important;
+            border: none !important;
+            outline: none !important;
+            padding: 0 16px !important;
+            height: 34px !important;
+            font-size: 13px !important;
+            font-weight: 600 !important;
+            color: white !important;
+            white-space: nowrap !important;
+            cursor: pointer !important;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), inset 0 -3px 0 rgba(0,0,0,0.2) !important;
+            transition: all 0.1s ease !important;
+            margin-bottom: 5px !important;
+        }
+
+        /* Physical 'Pressed' effect */
+        div.stButton > button[id*="tag_"]:active {
+            transform: translateY(2px) !important;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.2) !important;
+        }
+
+        /* Hover effect */
+        div.stButton > button[id*="tag_"]:hover {
+            filter: brightness(1.1) !important;
+            transform: translateY(-1px) !important;
+            box-shadow: 0 6px 8px -1px rgba(0, 0, 0, 0.15), inset 0 -3px 0 rgba(0,0,0,0.2) !important;
+        }
+
+        /* Type-specific colors */
+        button[id*="tag_Malware"] { background-color: #ef4444 !important; }
+        button[id*="tag_Vulnerability"] { background-color: #f59e0b !important; }
+        button[id*="tag_Indicator"] { background-color: #3b82f6 !important; }
+        button[id*="tag_Threat Group"] { background-color: #8b5cf6 !important; }
+        </style>
+    """, unsafe_allow_html=True)
+
+    artifact_list = st.session_state.artifacts
+    
+    if not artifact_list:
+        st.caption("No clues added yet.")
+    else:
+        # Create a large number of columns and force them to wrap via CSS
+        # This keeps them horizontal and left-aligned.
+        cols = st.columns([1] * 20) 
+        for i, art in enumerate(artifact_list):
+            # Fill columns one by one; CSS handles the wrapping and left-alignment
+            with cols[i % 20]:
+                btn_label = f"✕ {art['type']}: {art['value']}"
+                if st.button(btn_label, key=f"tag_{art['type']}_{i}"):
+                    st.session_state.artifacts.pop(i)
+                    st.rerun()
+    st.divider()
     
     if st.button("🚀 Run Correlation Analysis", type="primary", use_container_width=True):
         with st.spinner(f"Analyzing connections across the graph (Depth {depth})..."):
