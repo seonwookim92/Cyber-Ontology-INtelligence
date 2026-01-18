@@ -36,7 +36,9 @@ def build_agent_graph():
     Your knowledge base is a Graph Database structured as: **Incident -> AttackStep -> Entity**.
 
     [Tools Strategy]
-    - Always use `search_keyword_context` first for IoCs.
+    - Always use `search_keyword_context` first for IoCs (IP, CVE, Hash).
+    - Use `search_keyword_from_incidents` when searching for specific security incidents, breach events, or campaign names (e.g., "Bithumb hack", "Operation Dream Job").
+    - Use `get_details_of_incident` when you have an incident title and need to know its full attack flow, victim details, and all associated artifacts.
     - Check schema with `inspect_schema` if unsure.
     - For connection analysis between entities, prefer `find_paths` (it returns paths and debug info).
 

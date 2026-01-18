@@ -100,6 +100,90 @@ def search_keyword_context(keyword: str) -> str:
     return "No results found."
 
 @tool
+def search_keyword_from_incidents(keyword: str) -> str:
+    """
+    Search for a keyword across Incidents, Victims, and related Entities (Malware, CVE, Indicators).
+    Returns a list of matching Incidents.
+    """
+    q = """
+    // 1. 키워드에 매칭되는 시작 노드 찾기 (Incident, Identity, Malware, Vuln, Indicator)
+    MATCH (n)
+    WHERE (n:Incident OR n:Identity OR n:Malware OR n:Vulnerability OR n:Indicator)
+      AND (
+        toLower(coalesce(n.name, "")) CONTAINS toLower($kw) OR 
+        toLower(coalesce(n.title, "")) CONTAINS toLower($kw) OR 
+        toLower(coalesce(n.summary, "")) CONTAINS toLower($kw) OR 
+        toLower(coalesce(n.cve_id, "")) CONTAINS toLower($kw) OR 
+        toLower(coalesce(n.url, "")) CONTAINS toLower($kw) OR
+        toLower(coalesce(n.original_value, "")) CONTAINS toLower($kw)
+      )
+    
+    // 2. 해당 노드와 연결된 Incident 추적
+    MATCH (i:Incident)
+    WHERE (i = n)
+       OR (i)-[:TARGETS]->(n)
+       OR (i)-[:STARTS_WITH|NEXT*1..10]->(:AttackStep)-[:USES_MALWARE|EXPLOITS|HAS_INDICATOR]->(n)
+    
+    OPTIONAL MATCH (i)-[:TARGETS]->(v:Identity)
+    
+    RETURN DISTINCT i.title as title, 
+           i.summary as summary, 
+           i.timestamp as date,
+           v.name as victim,
+           v.industry as industry
+    ORDER BY i.timestamp DESC
+    LIMIT 15
+    """
+    res = graph_client.query(q, {"kw": keyword})
+    if res:
+        return json.dumps(res, ensure_ascii=False, default=str)[:4000]
+    return "No incidents found matching that keyword."
+
+@tool
+def get_details_of_incident(title_keyword: str) -> str:
+    """
+    Get full details of an incident including its complete attack flow and linked entities.
+    Searches using loose matching on the incident title.
+    """
+    q = """
+    MATCH (i:Incident)
+    WHERE toLower(i.title) CONTAINS toLower($kw)
+    OPTIONAL MATCH (i)-[:TARGETS]->(v:Identity)
+    
+    // 공격 단계(AttackStep)들을 순서대로 가져옴
+    OPTIONAL MATCH path = (i)-[:STARTS_WITH]->(s1:AttackStep)-[:NEXT*0..10]->(sn:AttackStep)
+    WITH i, v, nodes(path) as steps
+    UNWIND steps as s
+    
+    OPTIONAL MATCH (s)-[:USES_MALWARE]->(m:Malware)
+    OPTIONAL MATCH (s)-[:EXPLOITS]->(vuln:Vulnerability)
+    OPTIONAL MATCH (s)-[:HAS_INDICATOR]->(ind:Indicator)
+    
+    WITH i, v, s, 
+         collect(distinct m.name) as malwares,
+         collect(distinct vuln.cve_id) as vulns,
+         collect(distinct ind.url) as iocs
+    ORDER BY s.order ASC
+    
+    RETURN i.title as title, 
+           i.summary as summary, 
+           v.name as victim, 
+           v.system as victim_system,
+           collect({
+             step: s.order,
+             phase: s.phase,
+             description: s.description,
+             outcome: s.outcome,
+             artifacts: malwares + vulns + iocs
+           }) as attack_flow
+    LIMIT 1
+    """
+    res = graph_client.query(q, {"kw": title_keyword})
+    if res:
+        return json.dumps(res[0], ensure_ascii=False, default=str)[:6000]
+    return "Incident details not found."
+
+@tool
 def explore_incident_correlations(entity_name: str) -> str:
     """Check if an entity appears across multiple Incidents."""
     query = """
@@ -223,7 +307,7 @@ def expand_neighborhood(seed: str, hops: int = 2, limit: int = 200) -> str:
 
 
 # Add extended tools to export list so agent can use them
-NEO4J_TOOLS_EXTENDED += [list_labels, list_properties, sample_nodes_by_label, expand_neighborhood, find_entity_exact, find_entity_fuzzy, entity_history, ensure_entity_indexes]
+NEO4J_TOOLS_EXTENDED += [list_labels, list_properties, sample_nodes_by_label, expand_neighborhood, find_entity_exact, find_entity_fuzzy, entity_history, ensure_entity_indexes, search_keyword_from_incidents, get_details_of_incident]
 
 
 @tool
