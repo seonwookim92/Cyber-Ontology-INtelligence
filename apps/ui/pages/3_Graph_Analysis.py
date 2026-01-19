@@ -5,7 +5,7 @@ import os
 # 프로젝트 루트 경로 확보
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../")))
 
-from src.core.graph_client import graph_client
+from src.services import graph as graph_service
 from streamlit_agraph import agraph, Node, Edge, Config
 
 st.set_page_config(page_title="Graph Analysis", page_icon="🕸️", layout="wide")
@@ -45,9 +45,6 @@ NODE_STYLES = {
 }
 
 st.title("🕸️ Graph Analysis")
-st.markdown("""
-Graph Walking Mode: 아티팩트(Malware 등)를 눌러 연결된 사건을 찾고, 그 사건 노드에서 확장합니다.
-""")
 
 # ==============================================================================
 # 0. Session State 초기화
@@ -58,16 +55,12 @@ if "store_nodes" not in st.session_state: st.session_state.store_nodes = []
 if "store_edges" not in st.session_state: st.session_state.store_edges = []
 if "incident_timeline" not in st.session_state: st.session_state.incident_timeline = []
 if "last_selected_incident" not in st.session_state: st.session_state.last_selected_incident = None
-
-# [신규] Re-Layout 트리거용 시드 (Config 변경 감지용)
 if "layout_seed" not in st.session_state: st.session_state.layout_seed = 0
+if "analysis_mode" not in st.session_state: st.session_state.analysis_mode = "Incident Walkthrough"
 
 # ==============================================================================
-# 1. Helper Functions
+# 1. UI Helpers: DB 데이터를 시각화 객체로 변환
 # ==============================================================================
-def truncate_label(text, length=15):
-    if not text: return "Unknown"
-    return text if len(text) <= length else text[:length] + "..."
 
 def add_node_to_state(node_id, label, type_key, title="", custom_color=None):
     if node_id not in st.session_state.graph_nodes:
@@ -104,344 +97,320 @@ def reset_graph():
     st.session_state.store_edges = []
     st.session_state.incident_timeline = []
 
-def fetch_node_details(node_id):
-    """DB에서 노드의 상세 속성을 가져옴"""
-    q = ""
-    params = {}
+def map_node_to_vis(node_props, node_labels, element_id=None):
+    """DB 노드 데이터를 시각화용 Node로 매핑 (Deduplication 및 에러 방지)"""
+    nid = element_id or node_props.get('id') or node_props.get('name') or node_props.get('url')
     
-    if node_id.startswith("incident--"):
-        q = "MATCH (n:Incident {id: $id}) RETURN n"
-        params = {"id": node_id}
-    elif node_id.startswith("VIC_"):
-        inc_id = node_id.replace("VIC_", "")
-        q = "MATCH (:Incident {id: $inc_id})-[:TARGETS]->(n:Identity) RETURN n"
-        params = {"inc_id": inc_id}
-    elif node_id.startswith("ACT_"):
-        q = "MATCH (n:ThreatGroup) WHERE n.name = $val OR n.mitre_id = $val RETURN n"
-        params = {"val": node_id.replace("ACT_", "")}
-    elif node_id.startswith("MAL_"):
-        q = "MATCH (n:Malware {name: $val}) RETURN n"
-        params = {"val": node_id.replace("MAL_", "")}
-    elif node_id.startswith("CVE_"):
-        q = "MATCH (n:Vulnerability {cve_id: $val}) RETURN n"
-        params = {"val": node_id.replace("CVE_", "")}
-    elif node_id.startswith("IOC_"):
-        q = "MATCH (n:Indicator {url: $val}) RETURN n"
-        params = {"val": node_id.replace("IOC_", "")}
-    else:
-        # Step 등의 노드
-        q = "MATCH (n) WHERE n.id = $id OR id(n) = $id_int RETURN n"
-        params = {"id": node_id}
-        try: params["id_int"] = int(node_id)
-        except: params["id_int"] = -1
+    # Label 결정 및 산성화 (URL 등이 파일 경로로 오인되는 것 방지)
+    raw_label = node_props.get('name') or node_props.get('title') or node_props.get('cve_id') or node_props.get('url', 'Unknown')
+    label = graph_service.truncate_label(str(raw_label), 15)
+    # URL 특수 문자 제거 (에러 방어용)
+    label = label.replace("://", "_").replace("/", "_")
+    
+    type_key = "Step"
+    if 'Incident' in node_labels: type_key = "Incident"
+    elif 'Identity' in node_labels: type_key = "Victim"
+    elif 'ThreatGroup' in node_labels: type_key = "Actor"
+    elif 'Malware' in node_labels: type_key = "Malware"
+    elif 'Vulnerability' in node_labels: type_key = "Vulnerability"
+    elif 'Indicator' in node_labels: type_key = "Indicator"
+    
+    # tooltip용 title은 원본 유지
+    title = f"[{type_key}] {raw_label}"
+    if 'summary' in node_props: title += f"\n{node_props['summary']}"
+    if 'description' in node_props: title += f"\n{node_props['description']}"
 
-    res = graph_client.query(q, params)
-    return res[0]['n'] if res else None
+    add_node_to_state(nid, label, type_key, title=title)
+    return nid
 
 # ==============================================================================
-# 2. Core Logic: Merge Incident Subgraph
+# 2. Page Actions: 서비스 로직과 UI 상태 연결
 # ==============================================================================
-def merge_incident_subgraph(inc_id):
-    """특정 사건의 전체 그래프를 현재 상태에 병합"""
-    q_head = """
-    MATCH (i:Incident {id: $id})-[:TARGETS]->(v:Identity)
-    OPTIONAL MATCH (i)-[:ATTRIBUTED_TO]->(g:ThreatGroup)
-    RETURN i.title as title, i.summary as summary, v.name as victim, g.name as actor
-    """
-    head = graph_client.query(q_head, {"id": inc_id})
-    if not head: return 0
 
-    title = head[0]['title']
-    summary = head[0]['summary']
-    victim = head[0]['victim']
-    actor = head[0].get('actor')
+def load_incident_graph(inc_id):
+    """지정된 사건의 서브그래프 로드"""
+    data = graph_service.get_incident_subgraph(inc_id)
+    if not data: return
 
-    count = 0
-
-    short_title = truncate_label(title, 12)
-    if add_node_to_state(inc_id, short_title, "Incident", title=f"[Incident] {title}\n{summary}"): count += 1
+    head = data['header']
+    # 1. Header (Incident, Victim, Actor)
+    add_node_to_state(inc_id, graph_service.truncate_label(head['title'], 12), "Incident", title=f"[Incident] {head['title']}")
     
-    vic_id = f"VIC_{inc_id}"
-    if add_node_to_state(vic_id, truncate_label(victim), "Victim", title=f"[Victim] {victim}"): count += 1
-    add_edge_to_state(inc_id, vic_id, "TARGETS")
+    if head.get('victim_id'):
+        add_node_to_state(head['victim_id'], graph_service.truncate_label(head['victim']), "Victim", title=f"[Victim] {head['victim']}")
+        add_edge_to_state(inc_id, head['victim_id'], "TARGETS")
     
-    if actor:
-        act_id = f"ACT_{actor}"
-        if add_node_to_state(act_id, actor, "Actor", title=f"[Actor] {actor}"): count += 1
-        add_edge_to_state(inc_id, act_id, "ATTRIBUTED_TO")
+    if head.get('actor_id'):
+        add_node_to_state(head['actor_id'], head['actor'], "Actor", title=f"[Actor] {head['actor']}")
+        add_edge_to_state(inc_id, head['actor_id'], "ATTRIBUTED_TO")
 
-    # CASE WHEN을 사용해 정확한 아티팩트 타입 판별
-    q_path = """
-    MATCH (i:Incident {id: $id})-[:STARTS_WITH|NEXT*]->(s:AttackStep)
-    OPTIONAL MATCH (s)-[r]->(art)
-    WHERE type(r) IN ['USES_MALWARE', 'EXPLOITS', 'HAS_INDICATOR']
-    RETURN s.id as step_id, s.order as order, s.phase as phase, s.description as desc, s.outcome as outcome,
-           type(r) as rel, 
-           CASE 
-             WHEN 'Malware' IN labels(art) THEN 'Malware'
-             WHEN 'Vulnerability' IN labels(art) THEN 'Vulnerability'
-             WHEN 'Indicator' IN labels(art) THEN 'Indicator'
-             ELSE 'Unknown'
-           END as type, 
-           art.name as name, art.cve_id as cve, art.url as url
-    ORDER BY s.order
-    """
-    path = graph_client.query(q_path, {"id": inc_id})
-    
+    # 2. Steps & Artifacts
     prev_node = inc_id
     steps_map = {}
 
-    for row in path:
+    for row in data['path']:
         sid = row['step_id']
         label = f"#{row['order']} {row['phase']}"
         step_color = NODE_STYLES["Step"]["Success"]["color"] if row['outcome'] == "Success" else NODE_STYLES["Step"]["Fail"]["color"]
         
-        if add_node_to_state(sid, label, "Step", title=f"{row['phase']}: {row['desc']}", custom_color=step_color): count += 1
-        
-        rel_name = "STARTS_WITH" if row['order'] == 1 else "NEXT"
-        add_edge_to_state(prev_node, sid, rel_name)
+        add_node_to_state(sid, label, "Step", title=f"{row['phase']}: {row['desc']}", custom_color=step_color)
+        add_edge_to_state(prev_node, sid, "STARTS_WITH" if row['order'] == 1 else "NEXT")
         prev_node = sid
         
         if inc_id == st.session_state.last_selected_incident:
             if sid not in steps_map:
                 steps_map[sid] = {"order": row['order'], "phase": row['phase'], "desc": row['desc'], "outcome": row['outcome'], "artifacts": []}
 
-        if row['type'] and row['type'] != 'Unknown':
-            art_val = row.get('name') or row.get('cve') or row.get('url')
+        if row['art_id']: # Artifact 발견
+            art_props = row['props']
+            art_labels = row['labels']
+            art_val = art_props.get('name') or art_props.get('cve_id') or art_props.get('url')
             
             if inc_id == st.session_state.last_selected_incident:
-                steps_map[sid]['artifacts'].append(f"[{row['type']}] {art_val}")
+                atype = "Indicator"
+                if "Malware" in art_labels: atype = "Malware"
+                elif "Vulnerability" in art_labels: atype = "Vulnerability"
+                steps_map[sid]['artifacts'].append(f"[{atype}] {art_val}")
 
-            aid = ""
-            atype = ""
-            display = ""
-            
-            if row['type'] == 'Malware':
-                aid = f"MAL_{art_val}"; atype = "Malware"; display = art_val
-            elif row['type'] == 'Vulnerability':
-                aid = f"CVE_{art_val}"; atype = "Vulnerability"; display = art_val
-            elif row['type'] == 'Indicator':
-                aid = f"IOC_{art_val}"; atype = "Indicator"; display = truncate_label(art_val, 20)
-            
-            if aid:
-                if add_node_to_state(aid, display, atype, title=f"[{atype}] {art_val}"): count += 1
-                add_edge_to_state(sid, aid, row['rel'])
+            aid = map_node_to_vis(art_props, art_labels, element_id=row['art_id'])
+            add_edge_to_state(sid, aid, row['rel'])
 
     if inc_id == st.session_state.last_selected_incident:
         st.session_state.incident_timeline = sorted(steps_map.values(), key=lambda x: x['order'])
-        
-    return count
 
-def expand_node(node_id):
-    if node_id.startswith("incident--"):
-        cnt = merge_incident_subgraph(node_id)
-        return cnt
+def expand_neighbors(node_id):
+    """클릭된 노드의 주변 연결 엔티티 탐색"""
+    # Incident 노드는 사건 데이터 로드
+    # fetch_node_details를 통해 실제 라벨 확인
+    target_node = graph_service.fetch_node_details(node_id)
+    if not target_node: return 0
+    
+    labels = graph_service.graph_client.query("MATCH (n) WHERE elementId(n) = $id RETURN labels(n) as l", {"id": node_id})
+    n_labels = labels[0]['l'] if labels else []
 
-    node_val = None
-    q = None
-    current_inc_id = st.session_state.last_selected_incident
-
-    if node_id.startswith("MAL_"):
-        node_val = node_id.replace("MAL_", "")
-        q = """
-        MATCH (m:Malware {name: $val})<-[:USES_MALWARE]-(:AttackStep)<-[:STARTS_WITH|NEXT*]-(other_inc:Incident) WHERE other_inc.id <> $current_id
-        RETURN other_inc.id as res_id, other_inc.title as res_label, 'Incident' as type, 'USED_IN' as rel
-        UNION
-        MATCH (m:Malware {name: $val})<-[:USES]-(g:ThreatGroup)
-        RETURN g.name as res_id, g.name as res_label, 'Actor' as type, 'USED_BY' as rel
-        """
-    elif node_id.startswith("CVE_"):
-        node_val = node_id.replace("CVE_", "")
-        q = """
-        MATCH (v:Vulnerability {cve_id: $val})<-[:EXPLOITS]-(:AttackStep)<-[:STARTS_WITH|NEXT*]-(other_inc:Incident) WHERE other_inc.id <> $current_id
-        RETURN other_inc.id as res_id, other_inc.title as res_label, 'Incident' as type, 'EXPLOITED_IN' as rel
-        """
-    elif node_id.startswith("IOC_"):
-        node_val = node_id.replace("IOC_", "")
-        q = """
-        MATCH (i:Indicator {url: $val})<-[:HAS_INDICATOR]-(:AttackStep)<-[:STARTS_WITH|NEXT*]-(other_inc:Incident) WHERE other_inc.id <> $current_id
-        RETURN other_inc.id as res_id, other_inc.title as res_label, 'Incident' as type, 'SEEN_IN' as rel
-        """
-    elif node_id.startswith("ACT_"):
-        node_val = node_id.replace("ACT_", "")
-        q = """
-        MATCH (g:ThreatGroup {name: $val})<-[:ATTRIBUTED_TO]-(other_inc:Incident) WHERE other_inc.id <> $current_id
-        RETURN other_inc.id as res_id, other_inc.title as res_label, 'Incident' as type, 'ATTRIBUTED_TO' as rel
-        UNION
-        MATCH (g:ThreatGroup {name: $val})-[:USES]->(m:Malware)
-        RETURN m.name as res_id, m.name as res_label, 'Malware' as type, 'USES' as rel
-        """
-    else:
+    if 'Incident' in n_labels:
+        load_incident_graph(node_id)
+        return 1
+    
+    # Step 노드는 확장 금지
+    if 'AttackStep' in n_labels:
+        st.warning("Attack Step은 확장이 지원되지 않습니다.")
         return 0
-
-    results = graph_client.query(q, {"val": node_val, "current_id": current_inc_id})
+    
+    current_inc = st.session_state.get('last_selected_incident')
+    results = graph_service.explore_neighbors_query(node_id, current_inc)
+    
     count = 0
-    if not results: return 0
-
     for r in results:
-        res_type = r['type']
         res_id = r['res_id']
         res_label = r['res_label']
+        res_type = r['type']
         rel = r['rel']
 
-        new_id = ""
-        if res_type == 'Incident':
-            new_id = res_id
-            if add_node_to_state(new_id, truncate_label(res_label, 10), "Incident", title=res_label): count += 1
-            if rel == 'ATTRIBUTED_TO': add_edge_to_state(new_id, node_id, rel)
-            else: add_edge_to_state(node_id, new_id, rel)
-
-        elif res_type == 'Actor':
-            new_id = f"ACT_{res_id}"
-            if add_node_to_state(new_id, res_label, "Actor", title=res_label): count += 1
-            add_edge_to_state(node_id, new_id, rel)
-
-        elif res_type == 'Malware':
-            new_id = f"MAL_{res_id}"
-            if add_node_to_state(new_id, res_label, "Malware", title=res_label): count += 1
-            add_edge_to_state(node_id, new_id, rel)
-
+        # 노드 추가 (Deduplication)
+        if add_node_to_state(res_id, graph_service.truncate_label(res_label, 12), res_type, title=res_label): count += 1
+        
+        if rel == 'ATTRIBUTED_TO' or rel == 'USED_IN' or rel == 'EXPLOITED_IN' or rel == 'SEEN_IN':
+            # 관계의 방향성 고려 (Incident가 화살표 받는 쪽인 경우 등)
+            if res_type == 'Incident': add_edge_to_state(res_id, node_id, rel)
+            else: add_edge_to_state(node_id, res_id, rel)
+        else:
+            add_edge_to_state(node_id, res_id, rel)
+    
     return count
 
-# ==============================================================================
-# 3. Sidebar
-# ==============================================================================
-@st.cache_data(ttl=60)
-def get_incidents():
-    return graph_client.query("MATCH (i:Incident) RETURN i.id as id, i.title as title ORDER BY i.timestamp DESC LIMIT 30")
+def get_node_id_from_props(node_props):
+    """Properties에서 agraph용 nid 추출 (중복 로직 방지)"""
+    return node_props.get('id') or node_props.get('name') or node_props.get('cve_id') or node_props.get('url')
 
-incidents = get_incidents()
-if not incidents:
-    st.error("No incidents found.")
-    st.stop()
+def run_path_discovery(start_val, end_val):
+    """두 노드 간 최단 경로 탐색 실행 및 상태 업데이트"""
+    # Hops를 0으로 고정하여 최단 경로만 가져옴
+    results = graph_service.find_path_with_context(start_val, end_val, 0)
+    if not results: return 0
+    
+    # 1. 최단 경로(Core) 처리
+    if not results or not results[0].get('core_nodes'):
+        return 0
+        
+    p = results[0]
+    core_nodes_data = p['core_nodes']
+    core_rels_data = p['core_rels']
+    
+    # Core 노드 매핑
+    for n_data in core_nodes_data:
+        map_node_to_vis(n_data['props'], n_data['labels'], element_id=n_data['id'])
+    
+    # Core 엣지 추가
+    for rel in core_rels_data:
+        add_edge_to_state(rel['s_id'], rel['e_id'], rel['type'])
+            
+    return 1
+
+# ==============================================================================
+# 3. Sidebar: 분석 모드 및 입력 제어
+# ==============================================================================
 
 with st.sidebar:
-    st.header("🗂️ Select Incident")
-    options = {r['title']: r['id'] for r in incidents}
-    selected_label = st.selectbox("Incidents", list(options.keys()))
-    selected_id = options[selected_label]
-
-    if selected_id != st.session_state.last_selected_incident:
-        st.session_state.last_selected_incident = selected_id
-        reset_graph()
-        merge_incident_subgraph(selected_id)
-        st.rerun()
+    st.header("⚙️ Graph Controls")
     
+    # [핵심] 분석 모드 선택
+    mode = st.radio(
+        "Analysis Mode",
+        ["Incident Walkthrough", "Connection Analysis"],
+        index=0 if st.session_state.analysis_mode == "Incident Walkthrough" else 1
+    )
+    
+    if mode != st.session_state.analysis_mode:
+        st.session_state.analysis_mode = mode
+        reset_graph()
+        st.rerun()
+
+    st.divider()
+
+    if mode == "Incident Walkthrough":
+        st.subheader("🗂️ Select Incident")
+        incidents = graph_service.get_incidents()
+        options = {r['title']: r['id'] for r in incidents}
+        selected_label = st.selectbox("Historical Incidents", list(options.keys()))
+        selected_id = options[selected_label]
+
+        if selected_id != st.session_state.last_selected_incident:
+            st.session_state.last_selected_incident = selected_id
+            reset_graph()
+            load_incident_graph(selected_id)
+            st.rerun()
+            
+    else: # Connection Analysis
+        st.subheader("🕸️ Connection Analysis")
+        st.caption("엔트리 포인트와 타겟 간의 연결 고리를 탐색합니다.")
+
+        # Unified Search UI (BloodHound style)
+        if "src_selected" not in st.session_state: st.session_state.src_selected = None
+        if "tgt_selected" not in st.session_state: st.session_state.tgt_selected = None
+
+        # --- Source Selection ---
+        src_query = st.text_input("Start Node (Keywords)", placeholder="Search entity...", key="src_q")
+        src_options = graph_service.get_search_suggestions(src_query)
+        src_node = st.selectbox("Select Start Entity", src_options, index=None, key="src_sel")
+
+        # --- Target Selection ---
+        tgt_query = st.text_input("Target Node (Keywords)", placeholder="Search entity...", key="tgt_q")
+        tgt_options = graph_service.get_search_suggestions(tgt_query)
+        tgt_node = st.selectbox("Select Target Entity", tgt_options, index=None, key="tgt_sel")
+
+        # 버튼 클릭 또는 엔티티 변경 시 감지 로직
+        auto_trigger = False
+        if (src_node != st.session_state.src_selected or 
+            tgt_node != st.session_state.tgt_selected):
+            
+            # 값이 바뀌었다면 업데이트 대상
+            st.session_state.src_selected = src_node
+            st.session_state.tgt_selected = tgt_node
+            auto_trigger = True
+
+        if src_node and tgt_node:
+            if auto_trigger:
+                with st.spinner("Finding paths..."):
+                    reset_graph()
+                    st.session_state.last_selected_incident = None 
+                    num = run_path_discovery(src_node, tgt_node)
+                    if num == 0:
+                        st.warning("No connections found between these entities.")
+        else:
+            st.info("출발지와 목적지를 선택하면 경로가 자동으로 탐색됩니다.")
+
     st.divider()
     
     col_b1, col_b2 = st.columns(2)
     with col_b1:
         if st.button("🔄 Reset View", use_container_width=True):
             reset_graph()
-            merge_incident_subgraph(selected_id)
+            if mode == "Incident Walkthrough" and st.session_state.last_selected_incident:
+                load_incident_graph(st.session_state.last_selected_incident)
             st.rerun()
     with col_b2:
-        # [수정] 버튼 클릭 시 시드(Seed)를 변경하여 Config에 반영
         if st.button("🎲 Re-Layout", use_container_width=True):
             st.session_state.layout_seed += 1
-            if "graph_config" in st.session_state:
-                del st.session_state.graph_config
+            if "graph_config" in st.session_state: del st.session_state.graph_config
             st.rerun()
 
 # ==============================================================================
-# 4. Main Config & Layout
+# 4. Visualization & Inspector
 # ==============================================================================
-if "graph_config" not in st.session_state:
-    # [수정] 시드값을 이용해 물리 엔진 파라미터를 미세하게 변경 -> 강제 리렌더링 유도
-    # 0.001 정도의 차이는 시각적으로 동일하지만, Streamlit은 변경된 Config로 인식함
-    spring_len_tweak = 250 + (st.session_state.layout_seed * 0.001)
 
+# Graph Config Initialization
+if "graph_config" not in st.session_state:
+    spring_len = 250 + (st.session_state.layout_seed * 0.001)
     st.session_state.graph_config = Config(
-        width="100%",
-        height=750,
-        directed=True, 
-        physics=True,
-        hierarchical=False,
+        width="100%", height=750, directed=True, physics=True,
         backgroundColor="#212529", 
-        link={
-            'labelProperty': 'label', 'renderLabel': True,
-            'color': '#666666',
-            'font': {'color': '#CCCCCC', 'size': 10, 'background': '#212529', 'strokeWidth': 0}
-        },
-        physics_options={
-            "barnesHut": {
-                "gravitationalConstant": 0, 
-                "centralGravity": 0, 
-                "springLength": spring_len_tweak, # <-- [핵심] 여기에 Seed 반영
-                "springConstant": 0,
-                "damping": 0,
-                "avoidOverlap": 0.0001
-            }
-        }
+        link={'labelProperty': 'label', 'renderLabel': True, 'color': '#666666',
+              'font': {'color': '#CCCCCC', 'size': 10, 'background': '#212529', 'strokeWidth': 0}},
+        physics_options={"barnesHut": {"gravitationalConstant": 0, "centralGravity": 0, "springLength": spring_len, "avoidOverlap": 0.0001}}
     )
 
-config = st.session_state.graph_config
+col_graph, col_info = st.columns([2.5, 1])
 
-# ==============================================================================
-col1, col2 = st.columns([2.5, 1])
-
-with col1:
+with col_graph:
     selected_node_id = agraph(
         nodes=st.session_state.store_nodes, 
         edges=st.session_state.store_edges, 
-        config=config
+        config=st.session_state.graph_config
     )
 
-with col2:
-    tab1, tab2 = st.tabs(["🔍 Node Inspector", "📝 Attack Timeline"])
+with col_info:
+    tab_inspect, tab_time = st.tabs(["🔍 Node Inspector", "📝 Attack Timeline"])
     
-    with tab1:
+    with tab_inspect:
         if selected_node_id:
             st.markdown(f"**Selected:** `{selected_node_id}`")
             
-            if selected_node_id.startswith("incident--"):
-                st.info("이 사건의 전체 공격 흐름(Step)을 보려면 확장하세요.")
-                if st.button("📂 Expand Incident Details"):
-                    cnt = expand_node(selected_node_id)
-                    st.success(f"Graph merged with {cnt} new nodes.")
-            
-            elif any(selected_node_id.startswith(p) for p in ["MAL_", "CVE_", "IOC_", "ACT_"]):
-                st.info("연관된 다른 사건이나 정보를 찾습니다.")
-                if st.button("🌐 Find Connections"):
-                    cnt = expand_node(selected_node_id)
-                    if cnt > 0:
-                        st.success(f"{cnt} related items found!")
-                    else:
-                        st.warning("No new connections found.")
-            else:
-                st.caption("No actions available for this node.")
+            # --- 확장 제어 로직 ---
+            can_expand = False
+            details = graph_service.fetch_node_details(selected_node_id)
+            if details:
+                # DB 직접 조회로 라벨 확인
+                res = graph_service.graph_client.query("MATCH (n) WHERE elementId(n) = $id RETURN labels(n) as l", {"id": selected_node_id})
+                n_labels = res[0]['l'] if res else []
+                
+                # Step이 아니면서, 확장 가능한 타입들(Malware, Vuln, Actor, Indicator, Incident) 체크
+                if 'AttackStep' not in n_labels and any(l in n_labels for l in ['Malware', 'Vulnerability', 'ThreatGroup', 'Indicator', 'Incident']):
+                    can_expand = True
 
-            # --- [신규] 노드 세부 정보 출력 ---
+            if can_expand:
+                btn_label = "📂 Expand Incident" if 'Incident' in n_labels else "🌐 Find Connections"
+                if st.button(btn_label, use_container_width=True):
+                    num = expand_neighbors(selected_node_id)
+                    if num > 0:
+                        st.success(f"{num}개의 새로운 연결을 찾았습니다.")
+                        # rerun이 필요할 수 있음
+                        st.rerun()
+                    else:
+                        st.info("추가로 발견된 연결이 없습니다.")
+            elif 'AttackStep' in n_labels:
+                st.info("공격 단계(Step)는 확장을 지원하지 않습니다.")
+            else:
+                st.info("이 노드는 확장이 지원되지 않습니다.")
+            
             with st.expander("📄 Node Details", expanded=True):
-                details = fetch_node_details(selected_node_id)
+                details = graph_service.fetch_node_details(selected_node_id)
                 if details:
-                    # 중요 정보를 상단에 표시
-                    main_keys = ['name', 'title', 'cve_id', 'url', 'phase', 'description', 'summary']
-                    for k in main_keys:
+                    for k in ['name', 'title', 'cve_id', 'url', 'phase', 'description', 'summary']:
                         if k in details and details[k]:
                             st.markdown(f"**{k.capitalize()}:**")
                             st.write(details[k])
-                    
-                    # 나머지 모든 속성 표 형식으로 표시
-                    other_props = {k: v for k, v in details.items() if k not in main_keys and v}
+                    other_props = {k: v for k, v in details.items() if k not in ['name', 'title', 'cve_id', 'url', 'phase', 'description', 'summary'] and v}
                     if other_props:
-                        st.markdown("---")
+                        st.divider()
                         st.json(other_props)
-                else:
-                    st.warning("Could not fetch detailed properties from database.")
         else:
-            st.info("노드를 클릭하여 탐색하세요.")
+            st.info("Click a node to inspect.")
 
-        st.divider()
-        st.markdown("#### 🏷️ Legend")
-        st.caption("🛑 Incident / 👤 Actor / 🏢 Victim")
-        st.caption("🦠 Malware / ⚠️ CVE / 🟩 IoC")
-
-    with tab2:
-        st.markdown(f"### ⚡ Timeline: ")
+    with tab_time:
         timeline = st.session_state.incident_timeline
         if not timeline:
-            st.caption("Select the main incident node to see timeline.")
+            st.caption("Select an incident to see its timeline.")
         else:
             for step in timeline:
                 icon = "✅" if step['outcome'] == "Success" else "🚫"
@@ -449,5 +418,4 @@ with col2:
                     st.write(step['desc'])
                     if step['artifacts']:
                         st.markdown("**Artifacts:**")
-                        for a in step['artifacts']:
-                            st.caption(f"- {a}")
+                        for a in step['artifacts']: st.caption(f"- {a}")
