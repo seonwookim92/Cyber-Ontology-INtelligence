@@ -271,15 +271,25 @@ with st.sidebar:
     if mode == "Incident Walkthrough":
         st.subheader("🗂️ Select Incident")
         incidents = graph_service.get_incidents()
-        options = {r['title']: r['id'] for r in incidents}
-        selected_label = st.selectbox("Historical Incidents", list(options.keys()))
-        selected_id = options[selected_label]
-
-        if selected_id != st.session_state.last_selected_incident:
-            st.session_state.last_selected_incident = selected_id
-            reset_graph()
-            load_incident_graph(selected_id)
-            st.rerun()
+        if not incidents:
+            st.info("데이터베이스에 등록된 사고(Incident)가 없습니다. 파이프라인을 실행해 주세요.")
+            st.session_state.last_selected_incident = None
+        else:
+            options = {r['title']: r['id'] for r in incidents if r.get('title')}
+            if options:
+                selected_label = st.selectbox("Historical Incidents", list(options.keys()))
+                
+                if selected_label in options:
+                    selected_id = options[selected_label]
+                    if selected_id != st.session_state.last_selected_incident:
+                        st.session_state.last_selected_incident = selected_id
+                        reset_graph()
+                        load_incident_graph(selected_id)
+                        st.rerun()
+                else:
+                    st.session_state.last_selected_incident = None
+            else:
+                st.warning("유효한 제목을 가진 인시던트가 없습니다.")
             
     else: # Connection Analysis
         st.subheader("🕸️ Connection Analysis")
@@ -396,11 +406,15 @@ with col_info:
             with st.expander("📄 Node Details", expanded=True):
                 details = graph_service.fetch_node_details(selected_node_id)
                 if details:
-                    for k in ['name', 'title', 'cve_id', 'url', 'phase', 'description', 'summary']:
+                    # 'aliases' 추가
+                    for k in ['name', 'title', 'aliases', 'cve_id', 'url', 'phase', 'description', 'summary']:
                         if k in details and details[k]:
-                            st.markdown(f"**{k.capitalize()}:**")
+                            label_map = {'aliases': 'Aliases (별칭)'}
+                            st.markdown(f"**{label_map.get(k, k.capitalize())}:**")
                             st.write(details[k])
-                    other_props = {k: v for k, v in details.items() if k not in ['name', 'title', 'cve_id', 'url', 'phase', 'description', 'summary'] and v}
+                    
+                    other_keys = ['name', 'title', 'aliases', 'cve_id', 'url', 'phase', 'description', 'summary']
+                    other_props = {k: v for k, v in details.items() if k not in other_keys and v}
                     if other_props:
                         st.divider()
                         st.json(other_props)

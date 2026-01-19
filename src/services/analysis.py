@@ -174,16 +174,18 @@ def analyze_incident(uri: str, label: str) -> Tuple[str, List[str]]:
 
 def analyze_threat_group(uri: str, label: str) -> Tuple[str, List[str]]:
     """
-    Threat Group을 분석합니다. (기존 Incident 로직 이동)
+    Threat Group을 분석합니다. 별칭(Aliases) 정보를 포함합니다.
     """
     q = f"""
     MATCH (g:ThreatGroup)
     WHERE g.name = '{label}' OR g.mitre_id = '{uri}'
     
+    OPTIONAL MATCH (g)-[:ALIASED_AS]-(a:ThreatGroup)
     OPTIONAL MATCH (g)-[:USES]->(m:Malware)
     OPTIONAL MATCH (g)-[:USES]->(t:AttackTechnique)
     
     RETURN g.description as desc, 
+           collect(distinct a.name) as aliases,
            collect(distinct m.name) as malwares,
            collect(distinct t.mitre_id + ' ' + t.name) as techniques
     """
@@ -193,10 +195,14 @@ def analyze_threat_group(uri: str, label: str) -> Tuple[str, List[str]]:
     
     if data:
         row = data[0]
+        aliases = row.get('aliases', [])
+        if aliases:
+            facts.append(f"Aliases: {', '.join(aliases)}")
+            
         facts.append(f"Description: {row.get('desc', '')[:300]}...")
         
         malwares = row.get('malwares', [])
-        for m in malwares[:10]: # 너무 많으면 자름
+        for m in malwares[:10]:
             facts.append(f"Uses Malware: {m}")
             
         techs = row.get('techniques', [])
@@ -212,7 +218,7 @@ def analyze_threat_group(uri: str, label: str) -> Tuple[str, List[str]]:
     
     [Request]
     Profile this Threat Group.
-    1. Summarize their characteristics and main tools.
+    1. Summarize their characteristics and main tools (including aliases).
     2. Analyze their sophistication based on techniques.
     3. Recommended defenses.
     4. **All responses must be in Korean (한국어).**
@@ -221,12 +227,14 @@ def analyze_threat_group(uri: str, label: str) -> Tuple[str, List[str]]:
     return analysis, facts
 
 def analyze_malware(uri: str, label: str) -> Tuple[str, List[str]]:
-    # (기존 로직 유지)
+    """Malware 분석 시 별칭 정보를 포함합니다."""
     q = f"""
     MATCH (m:Malware) WHERE m.name = '{label}'
+    OPTIONAL MATCH (m)-[:ALIASED_AS]-(a:Malware)
     OPTIONAL MATCH (m)-[:USES]->(t:AttackTechnique)
     OPTIONAL MATCH (g:ThreatGroup)-[:USES]->(m)
     RETURN m.description as desc,
+           collect(distinct a.name) as aliases,
            collect(distinct t.mitre_id + ' ' + t.name) as techniques,
            collect(distinct g.name) as groups
     """
@@ -235,6 +243,10 @@ def analyze_malware(uri: str, label: str) -> Tuple[str, List[str]]:
     facts = [f"Malware: '{label}'"]
     if data:
         row = data[0]
+        aliases = row.get('aliases', [])
+        if aliases:
+            facts.append(f"Aliases: {', '.join(aliases)}")
+            
         facts.append(f"Description: {row.get('desc', '')[:200]}...")
         for g in row.get('groups', []): facts.append(f"Used By: {g}")
         for t in row.get('techniques', []): facts.append(f"Capability: {t}")

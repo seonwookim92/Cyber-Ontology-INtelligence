@@ -45,6 +45,12 @@ class GraphLoader:
         # 1. 초기화
         print("\n=== [1/6] Resetting Database ===")
         self.run_query_with_result("MATCH (n) DETACH DELETE n RETURN count(n)", "Deleting all existing nodes")
+        
+        # 사건 적재 로그 초기화 (재적재 보장)
+        imported_log_path = os.path.join(PROJECT_ROOT, 'data', 'processed', 'incidents_imported.json')
+        if os.path.exists(imported_log_path):
+            os.remove(imported_log_path)
+            print(f"    -> Cleared incident import log: {imported_log_path}")
 
         # 2. 스키마 설정
         print("\n=== [2/6] Creating Schema & Indexes ===")

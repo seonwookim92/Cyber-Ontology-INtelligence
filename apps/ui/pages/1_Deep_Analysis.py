@@ -34,13 +34,20 @@ else:
     # rows의 label은 보기 좋은 텍스트, uri는 실제 ID
     options = {r['label']: r for r in rows}
     
-    with col2:
-        selected_label = st.selectbox("분석할 항목 선택", list(options.keys()))
-        target = options[selected_label]
+    if options:
+        with col2:
+            selected_label = st.selectbox("분석할 항목 선택", list(options.keys()))
+            target = options.get(selected_label)
+    else:
+        target = None
+        st.warning(f"선택 가능한 {entity_type} 항목이 없습니다.")
 
     # 3. 분석 실행 버튼
     if st.button("🚀 상세 분석 실행", type="primary"):
-        st.divider()
+        if not target:
+            st.error("분석할 대상을 먼저 선택해 주세요.")
+        else:
+            st.divider()
         
         # 분석 로직 실행 (Service 호출)
         ai_text = ""
@@ -70,11 +77,19 @@ else:
                 
                 with c2:
                     st.subheader("🕸️ Knowledge Graph Evidence")
+                    
+                    # 별칭(Aliases) 강조 표시
+                    aliases_info = [f for f in facts if f.startswith("Aliases:")]
+                    if aliases_info:
+                        st.warning(f"🔍 {aliases_info[0]}")
+                    
                     st.write(f"Found {len(facts)} facts from Graph DB.")
                     with st.expander("추론 근거 (Evidence Trace) 보기", expanded=True):
                         for f in facts:
+                            if f.startswith("Aliases:"): continue # 위에서 표시함
+                            
                             # 텍스트가 너무 길면 보기 싫으니 적당히 포맷팅
-                            if f.startswith("---") or f.startswith("[Step"):
+                            if f.startswith("---") or f.startswith("[Step") or f.startswith("Threat Actor") or f.startswith("Malware"):
                                 st.markdown(f"**{f}**")
                             else:
                                 st.write(f"- {f}")

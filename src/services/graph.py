@@ -27,30 +27,51 @@ def get_search_suggestions(query):
     return [f"[{r['type']}] {r['label']} (ID:{r['id']})" for r in res]
 
 def fetch_node_details(node_id):
-    """DB에서 노드의 상세 속성을 가져옴 (elementId 기반)"""
-    # prefix가 붙어있는 구버전 ID 대응 (하위 호환)
+    """DB에서 노드의 상세 속성 및 별칭(Aliases)을 가져옴"""
     real_id = node_id
+    node = None
+    
+    # prefix 대응 (하위 호환)
     for prefix in ["VIC_", "ACT_", "MAL_", "CVE_", "IOC_"]:
         if node_id.startswith(prefix):
             val = node_id.replace(prefix, "")
-            q = """
-            MATCH (n) 
-            WHERE n.id = $val OR n.name = $val OR n.cve_id = $val OR n.url = $val
-            RETURN n LIMIT 1
-            """
+            q = "MATCH (n) WHERE n.id = $val OR n.name = $val OR n.cve_id = $val OR n.url = $val RETURN n LIMIT 1"
             res = graph_client.query(q, {"val": val})
-            if res: return res[0]['n']
+            if res:
+                node = res[0]['n']
+                real_id = graph_client.query("RETURN elementId($n) as eid", {"n": node})[0]['eid']
             break
 
-    # 1. elementId로 직접 조회 (권장)
-    q = "MATCH (n) WHERE elementId(n) = $id RETURN n"
-    res = graph_client.query(q, {"id": real_id})
-    if res: return res[0]['n']
+    if not node:
+        # elementId로 직접 조회
+        q = "MATCH (n) WHERE elementId(n) = $id RETURN n"
+        res = graph_client.query(q, {"id": real_id})
+        if res:
+            node = res[0]['n']
+        else:
+            # 일반 id property인 경우
+            q = "MATCH (n) WHERE n.id = $id RETURN n"
+            res = graph_client.query(q, {"id": real_id})
+            if res: node = res[0]['n']
+
+    if not node: return None
+
+    # 별칭(ALIASED_AS) 정보 추가 조회
+    q_aliases = """
+    MATCH (n)-[:ALIASED_AS]-(a)
+    WHERE elementId(n) = $id
+    RETURN collect(distinct a.name) as aliases
+    """
+    alias_res = graph_client.query(q_aliases, {"id": real_id})
+    aliases = alias_res[0]['aliases'] if alias_res else []
+
+    # 노드 속성을 dict로 변환하고 별칭 추가
+    # Neo4j Node 객체는 dict()로 변환 가능
+    details = dict(node)
+    if aliases:
+        details['aliases'] = ", ".join(aliases)
     
-    # 2. 혹시 일반 id property인 경우
-    q = "MATCH (n) WHERE n.id = $id RETURN n"
-    res = graph_client.query(q, {"id": real_id})
-    return res[0]['n'] if res else None
+    return details
 
 def get_incident_subgraph(inc_id):
     """특정 사건의 전체 데이터(Header, Steps, Artifacts) 조회"""

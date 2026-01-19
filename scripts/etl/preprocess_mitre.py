@@ -44,10 +44,8 @@ def process_mitre_data():
     nodes = []
     rels = []
     valid_stix_ids = set()
+    name_to_id = {} # name.lower() -> stix_id
 
-    # 1. Node(개체) 추출
-    print("[*] Parsing Nodes (Techniques, Groups, Malware, etc.)...")
-    
     # 우리가 관심을 가질 STIX 타입 -> Neo4j Label 매핑
     type_mapping = {
         'attack-pattern': 'AttackTechnique',
@@ -58,48 +56,86 @@ def process_mitre_data():
         'x-mitre-tactic': 'AttackTactic'
     }
 
+    # 1. 1차 패스: 모든 "메인" 노드 추출 및 이름 맵핑 생성
+    print("[*] Phase 1: Parsing Main Nodes...")
     for obj in objects:
         stix_type = obj.get('type')
-        
-        # 폐기된(revoked) 객체나 더 이상 안 쓰는(deprecated) 객체는 제외
-        if obj.get('revoked') or obj.get('x_mitre_deprecated'):
-            continue
-
+        if obj.get('revoked') or obj.get('x_mitre_deprecated'): continue
         if stix_type in type_mapping:
-            label = type_mapping[stix_type]
             stix_id = obj.get('id')
             name = obj.get('name', 'Unknown')
+            name_to_id[name.lower()] = stix_id
+            
+            label = type_mapping[stix_type]
             description = sanitize(obj.get('description', ''))
             mitre_id = get_mitre_id(obj)
             
-            # Tactic의 경우 shortname(예: persistence)을 ID로 쓰기도 함
             if stix_type == 'x-mitre-tactic' and not mitre_id:
                 mitre_id = obj.get('x_mitre_shortname', '')
 
-            # CSV 행 데이터 준비
             nodes.append({
                 'stix_id': stix_id,
                 'label': label,
                 'name': name,
                 'mitre_id': mitre_id,
-                'description': description[:1000] # 너무 길면 자름
+                'description': description[:1000]
             })
             valid_stix_ids.add(stix_id)
 
-    # 2. Relationship(관계) 추출
-    print("[*] Parsing Relationships...")
+    # 2. 2차 패스: 별칭(Aliases) 처리
+    print("[*] Phase 2: Processing Aliases...")
+    import hashlib
+    for obj in objects:
+        stix_type = obj.get('type')
+        if obj.get('revoked') or obj.get('x_mitre_deprecated'): continue
+        
+        # ThreatGroup 또는 Malware의 별칭 필드 확인
+        aliases = obj.get('aliases', []) or obj.get('x_mitre_aliases', [])
+        if not aliases: continue
+        
+        stix_id = obj.get('id')
+        name = obj.get('name', 'Unknown')
+        
+        for alias in aliases:
+            if alias.lower() == name.lower(): continue
+            
+            target_id = None
+            # 이미 메인 노드 중에 동일한 이름이 있는지 확인
+            if alias.lower() in name_to_id:
+                target_id = name_to_id[alias.lower()]
+            else:
+                # 없으면 가상 노드 ID 생성 및 추가
+                alias_stix_id = f"alias--{hashlib.md5(alias.encode()).hexdigest()}"
+                target_id = alias_stix_id
+                
+                if alias_stix_id not in valid_stix_ids:
+                    nodes.append({
+                        'stix_id': alias_stix_id,
+                        'label': type_mapping.get(stix_type, 'BaseNode'),
+                        'name': alias,
+                        'mitre_id': "Alias",
+                        'description': f"Alias for '{name}'"
+                    })
+                    valid_stix_ids.add(alias_stix_id)
+            
+            # ALIASED_AS 관계 추가
+            if stix_id in valid_stix_ids and target_id in valid_stix_ids:
+                rels.append({
+                    'source_id': stix_id,
+                    'target_id': target_id,
+                    'type': 'ALIASED_AS'
+                })
+
+    # 3. 3차 패스: Relationship(기존 관계) 추출
+    print("[*] Phase 3: Parsing Relationships...")
     for obj in objects:
         if obj.get('type') == 'relationship':
             source = obj.get('source_ref')
             target = obj.get('target_ref')
-            rel_type = obj.get('relationship_type') # uses, mitigates, subtechnique-of
+            rel_type = obj.get('relationship_type')
             
-            # 소스와 타겟이 모두 우리가 추출한 유효한 노드일 때만 저장
             if source in valid_stix_ids and target in valid_stix_ids:
-                # 관계 타입 정규화 (스네이크 케이스 -> 대문자)
-                # 예: subtechnique-of -> SUBTECHNIQUE_OF
                 normalized_type = rel_type.upper().replace('-', '_')
-                
                 rels.append({
                     'source_id': source,
                     'target_id': target,
