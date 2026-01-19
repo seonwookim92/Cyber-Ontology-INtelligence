@@ -1,10 +1,9 @@
 import json
 from typing import List, Dict, Tuple, Any
 
-from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from langchain_ollama import ChatOllama
-from langchain_core.output_parsers import StrOutputParser
+from langchain_core.messages import SystemMessage, HumanMessage
 
 from src.core.config import settings
 from src.core.graph_client import graph_client
@@ -12,6 +11,7 @@ from src.core.graph_client import graph_client
 # ==============================================================================
 # 0. LLM Helper
 # ==============================================================================
+
 def _get_llm():
     if settings.LLM_PROVIDER == "openai":
         return ChatOpenAI(model=settings.OPENAI_MODEL, api_key=settings.OPENAI_API_KEY, temperature=0)
@@ -21,12 +21,12 @@ def _get_llm():
 def _generate_analysis(system_prompt: str, user_prompt: str) -> str:
     try:
         llm = _get_llm()
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
-            ("human", user_prompt)
-        ])
-        chain = prompt | llm | StrOutputParser()
-        return chain.invoke({})
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_prompt)
+        ]
+        response = llm.invoke(messages)
+        return response.content
     except Exception as e:
         return f"AI Analysis Failed: {str(e)}"
 

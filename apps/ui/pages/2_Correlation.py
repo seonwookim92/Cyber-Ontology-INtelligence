@@ -228,21 +228,44 @@ else:
                     df_display = pd.DataFrame({
                         'Suspect Group/Entity': df['label'],
                         'Type': df['type'],
-                        'Match Score': df['score'].round(2),
                         'Confidence(%)': df['percent'].round(2),
-                        'Evidence Path': df['matches']
+                        'Matched Clues': df['matches'],
+                        'Shared Evidence': df['evidence']
                     })
                     
                     try:
                         st.dataframe(
                             df_display.style.format({
-                                'Match Score': '{:.2f}',
                                 'Confidence(%)': '{:.2f}'
-                            }).background_gradient(subset=['Match Score'], cmap="Reds"),
-                            use_container_width=True
+                            }).background_gradient(subset=['Confidence(%)'], cmap="Reds"),
+                            width='stretch',
+                            column_config={
+                                "Suspect Group/Entity": st.column_config.TextColumn(
+                                    "Suspect Group/Entity",
+                                    help="지식 그래프 분석을 통해 배후 위협 그룹으로 의심되는 이름입니다."
+                                ),
+                                "Type": st.column_config.TextColumn(
+                                    "Type",
+                                    help="엔티티의 유형입니다."
+                                ),
+                                "Confidence(%)": st.column_config.NumberColumn(
+                                    "Confidence(%)",
+                                    help="입력 단서와의 연결 밀도, 공유 지식, 사고 이력을 종합한 최종 신뢰도입니다.",
+                                    format="%.2f%%"
+                                ),
+                                "Matched Clues": st.column_config.TextColumn(
+                                    "Matched Clues",
+                                    help="사용자가 입력한 아티팩트 중 해당 그룹과 직접 연관된 단서들입니다."
+                                ),
+                                "Shared Evidence": st.column_config.TextColumn(
+                                    "Shared Evidence",
+                                    help="사용자 입력 외에 분석 과정에서 공통 매개체(악성코드, CVE 등)로 발견된 증거입니다."
+                                )
+                            },
+                            hide_index=True
                         )
                     except:
-                        st.dataframe(df_display, use_container_width=True)
+                        st.dataframe(df_display, width='stretch', hide_index=True)
                 else:
                     st.warning("No strong correlations found with the current database.")
                     
