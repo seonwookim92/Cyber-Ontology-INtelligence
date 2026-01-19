@@ -71,25 +71,36 @@ def get_entity_list(entity_type: str, limit: int = 100, search_query: str = None
         elif entity_type == "Threat Group":
             q = """
             MATCH (n:ThreatGroup)
-            WHERE toLower(n.name) CONTAINS $query OR toLower(n.description) CONTAINS $query
-            WITH n,
+            OPTIONAL MATCH (n)-[:ALIASED_AS]-(a)
+            WHERE toLower(n.name) CONTAINS $query 
+               OR toLower(n.description) CONTAINS $query
+               OR toLower(a.name) CONTAINS $query
+            WITH n, collect(distinct a.name) as aliases
+            WITH n, aliases,
                  CASE 
                    WHEN toLower(n.name) = $query THEN 100
-                   WHEN toLower(n.name) STARTS WITH $query THEN 50
-                   ELSE 20
+                   WHEN any(al IN aliases WHERE toLower(al) = $query) THEN 95
+                   WHEN toLower(n.name) CONTAINS $query THEN 50
+                   WHEN any(al IN aliases WHERE toLower(al) CONTAINS $query) THEN 40
+                   ELSE 10
                  END as score
-            RETURN n.mitre_id as uri, n.name as label
+            RETURN n.mitre_id as uri, 
+                   n.name + CASE WHEN size(aliases) > 0 THEN ' (a.k.a ' + apoc.text.join(aliases, ', ') + ')' ELSE '' END as label
             ORDER BY score DESC, n.name ASC LIMIT $limit
             """
         elif entity_type == "Malware":
             q = """
             MATCH (n:Malware)
-            WHERE toLower(n.name) CONTAINS $query
-            WITH n,
+            OPTIONAL MATCH (n)-[:ALIASED_AS]-(a)
+            WHERE toLower(n.name) CONTAINS $query OR toLower(a.name) CONTAINS $query
+            WITH n, collect(distinct a.name) as aliases
+            WITH n, aliases,
                  CASE 
                    WHEN toLower(n.name) = $query THEN 100
-                   WHEN toLower(n.name) STARTS WITH $query THEN 50
-                   ELSE 20
+                   WHEN any(al IN aliases WHERE toLower(al) = $query) THEN 95
+                   WHEN toLower(n.name) CONTAINS $query THEN 50
+                   WHEN any(al IN aliases WHERE toLower(al) CONTAINS $query) THEN 40
+                   ELSE 10
                  END as score
             RETURN n.name as uri, n.name as label
             ORDER BY score DESC, n.name ASC LIMIT $limit

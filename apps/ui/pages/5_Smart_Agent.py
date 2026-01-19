@@ -89,10 +89,10 @@ with st.sidebar:
     sample_questions = [
         "현재 데이터베이스의 스키마 구조(Incident, Entity 등)를 알려줘.",
         "CVE-2025-14847 취약점과 '한국수력원자력 원전제어망' 사이에 연결점(연관성)이 있는지 찾아줘.",
-        "bc644febfc0a9500bcc24d26fbfa9cae라는 해시값이 여러 사건에 등장하는지 확인해줘.",
-        "IP '193.24.123.68'이 포함된 침해 사고 정보를 찾아줘.",
-        "최근 6개월 내에 'DarkHydrus' 위협 그룹이 관련된 사건들을 알려줘.",
-        "Malware '4H RAT'이 연관된 사건들의 IoC들을 찾아줘"
+        "블록체인 또는 가상화폐와 관련된 사건을 어떤 공격자가 주로 하고 있는지 찾아줘.",
+        "IP '101.35.56.7'이 포함된 침해 사고 정보를 찾아줘.",
+        "최근 6개월 내에 'Turla' 위협 그룹이 관련된 사건들을 알려줘.",
+        "Malware 'TrickBot'이 연관된 사건들의 IoC들을 찾아줘"
     ]
 
     for q in sample_questions:
@@ -107,14 +107,18 @@ with st.sidebar:
 # ==============================================================================
 # 4. 메인 로직 함수
 # ==============================================================================
+# ==============================================================================
+# 4. 메인 로직 함수
+# ==============================================================================
 def process_query(user_input):
     # 1. 사용자 메시지 UI 표시 및 저장
     st.session_state.messages.append({"role": "user", "content": user_input})
     
     # 2. 에이전트 실행
     final_response = ""
+    current_steps = [] # 이번 턴의 도구 호출 기록 저장용
     
-    # UI에 그리기 (이전 메시지들은 아래 메인 루프에서 이미 그려짐)
+    # UI에 그리기
     with st.chat_message("user"):
         st.markdown(user_input)
 
@@ -123,7 +127,6 @@ def process_query(user_input):
         status_placeholder = st.status("🧠 Agent is reasoning...", expanded=True)
         
         try:
-            # [핵심] 수정한 agent.py의 그래프 빌더 호출
             graph = agent.build_agent_graph()
             
             current_human_msg = HumanMessage(content=user_input)
@@ -142,24 +145,24 @@ def process_query(user_input):
                     if isinstance(last_msg, AIMessage) and last_msg.tool_calls:
                         for tc in last_msg.tool_calls:
                             step_count += 1
-                            st.write(f"**Step {step_count}:** 🤔 Decided to use tool `{tc['name']}`")
+                            msg_text = f"**Step {step_count}:** 🤔 Decided to use tool `{tc['name']}`"
+                            st.write(msg_text)
+                            current_steps.append({"type": "call", "count": step_count, "name": tc['name'], "args": tc['args']})
                             with st.expander(f"Arguments for {tc['name']}", expanded=False):
                                 st.code(json.dumps(tc['args'], indent=2, ensure_ascii=False), language="json")
 
                     # Tool 실행 결과
                     elif isinstance(last_msg, ToolMessage):
-                        st.write(f"**Step {step_count}:** 🔍 Tool Output (`{last_msg.name}`)")
+                        msg_text = f"**Step {step_count}:** 🔍 Tool Output (`{last_msg.name}`)"
+                        st.write(msg_text)
+                        current_steps.append({"type": "result", "count": step_count, "name": last_msg.name, "content": last_msg.content})
                         with st.expander("Show Result", expanded=False):
                             raw = last_msg.content or ""
                             try:
                                 content_json = json.loads(raw)
-                                # Show structured JSON and provide a download button for full content
                                 st.json(content_json)
-                                st.download_button("Download JSON", data=json.dumps(content_json, ensure_ascii=False, indent=2), file_name=f"tool_result_{step_count}_{last_msg.name}.json", mime="application/json", key=f"dl_json_{step_count}_{last_msg.name}")
                             except Exception:
-                                # Show full raw text and allow download
                                 st.code(raw, language="text")
-                                st.download_button("Download Result", data=raw, file_name=f"tool_result_{step_count}_{last_msg.name}.txt", mime="text/plain", key=f"dl_txt_{step_count}_{last_msg.name}")
 
                     # 최종 답변
                     elif isinstance(last_msg, AIMessage) and last_msg.content:
@@ -171,15 +174,19 @@ def process_query(user_input):
             if final_response:
                 response_placeholder.markdown(final_response)
                 
-                # 대화 기록 저장
-                st.session_state.messages.append({"role": "assistant", "content": final_response})
+                # 대화 기록 저장 (steps 포함)
+                st.session_state.messages.append({
+                    "role": "assistant", 
+                    "content": final_response,
+                    "steps": current_steps
+                })
                 st.session_state.langchain_history.append(current_human_msg)
                 st.session_state.langchain_history.append(AIMessage(content=final_response))
                 
                 # 후속 질문 생성
                 suggestions = generate_followup_questions(user_input, final_response)
                 st.session_state.followup_suggestions = suggestions
-                st.rerun() # 추천 질문 렌더링을 위해 리런
+                st.rerun()
                 
             else:
                 response_placeholder.error("죄송합니다. 답변을 생성하지 못했습니다.")
@@ -195,6 +202,22 @@ def process_query(user_input):
 # A. 이전 대화 기록 출력 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
+        # [추가] 에이전트의 사고 과정(Steps)이 있다면 확장 버튼으로 표시
+        if msg["role"] == "assistant" and msg.get("steps"):
+            with st.expander("🔍 분석 사고 과정 (Tool Execution Logs)", expanded=False):
+                for s in msg["steps"]:
+                    if s["type"] == "call":
+                        st.write(f"**Step {s['count']}:** 🛠️ `{s['name']}` 도구 사용 결정")
+                        st.caption("입력 파라미터:")
+                        st.code(json.dumps(s['args'], indent=2, ensure_ascii=False), language="json")
+                    else:
+                        st.write(f"**Step {s['count']}:** 📥 `{s['name']}` 실행 결과 수신")
+                        try:
+                            st.json(json.loads(s['content']))
+                        except:
+                            st.code(s['content'], language="text")
+                st.divider()
+        
         st.markdown(msg["content"])
 
 # B. 후속 질문 선택지 출력 (마지막이 AI 답변일 때만)

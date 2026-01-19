@@ -30,12 +30,20 @@ def _normalize(s: str) -> str:
 
 def _apoc_available() -> bool:
     try:
-        res = graph_client.query("CALL dbms.procedures() YIELD name WHERE name CONTAINS 'apoc' RETURN count(*) as cnt")
+        # Neo4j 5.x+ uses SHOW PROCEDURES
+        res = graph_client.query("SHOW PROCEDURES YIELD name WHERE name CONTAINS 'apoc' RETURN count(*) as cnt")
         if res and isinstance(res, list) and len(res) > 0:
             cnt = list(res[0].values())[0]
             return int(cnt) > 0
     except Exception:
-        return False
+        # Fallback for older versions if needed, or if SHOW PROCEDURES fails
+        try:
+            res = graph_client.query("CALL dbms.procedures() YIELD name WHERE name CONTAINS 'apoc' RETURN count(*) as cnt")
+            if res and isinstance(res, list) and len(res) > 0:
+                cnt = list(res[0].values())[0]
+                return int(cnt) > 0
+        except:
+            return False
     return False
 
 # --------------------------------------------------------------------------
@@ -83,22 +91,27 @@ Core Ontology Connections:
 @tool
 def search_keyword_context(keyword: str) -> str:
     """
-    Search for a keyword (IP, CVE, Hash, Name, etc.) across all core labels and return its Incident/Knowledge context.
+    Search for a keyword (IP, CVE, Hash, Name, etc.) across all nodes and return its Incident/Knowledge context.
+    Treats aliased nodes (ALIASED_AS) as the same object.
     Use this as the primary starting point for any specific entity search.
     """
     # 1) Exact match across common identifying properties
     q_exact = """
-    MATCH (n)
-    WHERE n:Entity OR n:ThreatGroup OR n:Malware OR n:Vulnerability OR n:Indicator OR n:Incident
-    WITH n WHERE n.name = $kw OR n.original_value = $kw OR n.cve_id = $kw OR n.title = $kw OR n.id = $kw
+    MATCH (start)
+    WHERE start.name = $kw OR start.original_value = $kw OR start.cve_id = $kw 
+       OR start.title = $kw OR start.id = $kw OR start.value = $kw OR start.url = $kw
+    
+    // 별칭 관계 확장 (동일 객체 취급)
+    OPTIONAL MATCH (start)-[:ALIASED_AS*0..1]-(canonical)
+    WITH distinct canonical as n
     
     // 연결된 context 및 별칭 처리
-    OPTIONAL MATCH (n)-[:ALIASED_AS*0..1]-(alias)
+    OPTIONAL MATCH (n)-[:ALIASED_AS*1..1]-(alias)
     OPTIONAL MATCH (n)-[:HAS_ATTACK_FLOW|STARTS_WITH|NEXT*0..2]-(step:AttackStep)
     OPTIONAL MATCH (step)-[:HAS_ATTACK_FLOW|STARTS_WITH|NEXT*0..1]-(i:Incident)
     
     RETURN labels(n) as labels, 
-           coalesce(n.name, n.title, n.cve_id, n.original_value) as name,
+           coalesce(n.name, n.title, n.cve_id, n.original_value, n.value, n.url) as name,
            collect(distinct alias.name) as aliases,
            collect(distinct i.title) as related_incidents
     LIMIT 20
@@ -109,13 +122,21 @@ def search_keyword_context(keyword: str) -> str:
 
     # 2) Contains (case-insensitive) fallback
     q_contains = """
-    MATCH (n)
-    WHERE n:Entity OR n:ThreatGroup OR n:Malware OR n:Vulnerability OR n:Indicator OR n:Incident
-    WITH n WHERE toLower(coalesce(n.name, n.title, n.cve_id, n.original_value, "")) CONTAINS toLower($kw)
+    MATCH (start)
+    WHERE toLower(coalesce(start.name, "")) CONTAINS toLower($kw)
+       OR toLower(coalesce(start.title, "")) CONTAINS toLower($kw)
+       OR toLower(coalesce(start.cve_id, "")) CONTAINS toLower($kw)
+       OR toLower(coalesce(start.original_value, "")) CONTAINS toLower($kw)
+       OR toLower(coalesce(start.value, "")) CONTAINS toLower($kw)
+       OR toLower(coalesce(start.url, "")) CONTAINS toLower($kw)
+    
+    // 별칭 확장
+    OPTIONAL MATCH (start)-[:ALIASED_AS*0..1]-(canonical)
+    WITH distinct canonical as n
     
     RETURN labels(n) as labels, 
-           coalesce(n.name, n.title, n.cve_id, n.original_value) as name,
-           n.type as type
+           coalesce(n.name, n.title, n.cve_id, n.original_value, n.value, n.url) as name,
+           n as props
     LIMIT 50
     """
     res = graph_client.query(q_contains, {"kw": keyword})
@@ -128,26 +149,29 @@ def search_keyword_context(keyword: str) -> str:
 def search_keyword_from_incidents(keyword: str) -> str:
     """
     Search for a keyword across Incidents, Victims, and related Entities (ThreatGroups, Malware, CVE, Indicators).
+    Treats aliased nodes (ALIASED_AS) as the same object.
     Returns a list of matching Incidents.
     """
     q = """
     // 1. 키워드에 매칭되는 시작 노드 찾기
-    MATCH (n)
-    WHERE (n:Incident OR n:Identity OR n:Malware OR n:Vulnerability OR n:Indicator OR n:ThreatGroup)
-      AND (
-        toLower(coalesce(n.name, "")) CONTAINS toLower($kw) OR 
-        toLower(coalesce(n.title, "")) CONTAINS toLower($kw) OR 
-        toLower(coalesce(n.summary, "")) CONTAINS toLower($kw) OR 
-        toLower(coalesce(n.cve_id, "")) CONTAINS toLower($kw) OR 
-        toLower(coalesce(n.url, "")) CONTAINS toLower($kw) OR
-        toLower(coalesce(n.original_value, "")) CONTAINS toLower($kw)
-      )
+    MATCH (start)
+    WHERE toLower(coalesce(start.name, "")) CONTAINS toLower($kw) OR 
+          toLower(coalesce(start.title, "")) CONTAINS toLower($kw) OR 
+          toLower(coalesce(start.summary, "")) CONTAINS toLower($kw) OR 
+          toLower(coalesce(start.cve_id, "")) CONTAINS toLower($kw) OR 
+          toLower(coalesce(start.url, "")) CONTAINS toLower($kw) OR
+          toLower(coalesce(start.value, "")) CONTAINS toLower($kw) OR
+          toLower(coalesce(start.original_value, "")) CONTAINS toLower($kw)
     
-    // 2. 해당 노드와 연결된 Incident 추적
+    // 2. 별칭 관계 확장 (동일 객체 취급)
+    OPTIONAL MATCH (start)-[:ALIASED_AS*0..1]-(canonical)
+    WITH distinct canonical as n
+    
+    // 3. 해당 노드와 연결된 Incident 추적
     MATCH (i:Incident)
     WHERE (i = n)
-       OR (i)-[:TARGETS|ATTRIBUTED_TO]-(n)
-       OR (i)-[:STARTS_WITH|NEXT|HAS_ATTACK_FLOW*1..10]-(:AttackStep)-[:USES_MALWARE|EXPLOITS|HAS_INDICATOR|INVOLVES_ENTITY]-(n)
+       OR (i)-[:TARGETS|ATTRIBUTED_TO|ALIASED_AS*0..1]-(n)
+       OR (i)-[:STARTS_WITH|NEXT|HAS_ATTACK_FLOW*1..10]-(:AttackStep)-[:USES_MALWARE|EXPLOITS|HAS_INDICATOR|INVOLVES_ENTITY|ALIASED_AS*0..1]-(n)
     
     OPTIONAL MATCH (i)-[:TARGETS]->(v:Identity)
     
@@ -342,14 +366,24 @@ def find_paths(start: str, end: str = None, max_len: int = 4, max_paths: int = 2
     - Returns JSON with path records; if debug=True returns used Cypher and params.
     """
     try:
-        # safety caps
         max_len = min(int(max_len), 6)
         max_paths = min(int(max_paths), 200)
     except Exception:
         max_len = 4
         max_paths = 20
 
-    params = {"start": start, "end": end, "max_len": max_len, "max_paths": max_paths, "rel_filter": rel_filter or "", "label_filter": label_filter or ""}
+    # [개선] 텅 빈 문자열이 들어오면 None으로 치환하여 APOC이 '모든 관계/라벨'로 인식하게 함
+    r_filter = rel_filter if rel_filter and rel_filter.strip() else None
+    l_filter = label_filter if label_filter and label_filter.strip() else None
+
+    params = {
+        "start": start, 
+        "end": end, 
+        "max_len": max_len, 
+        "max_paths": max_paths, 
+        "rel_filter": r_filter, 
+        "label_filter": l_filter
+    }
 
     use_apoc = _apoc_available()
 
@@ -357,7 +391,7 @@ def find_paths(start: str, end: str = None, max_len: int = 4, max_paths: int = 2
     resolve_q = """
     MATCH (n)
     WHERE any(k IN keys(n) WHERE toString(n[k]) = $val OR toLower(toString(n[k])) = toLower($val))
-    RETURN id(n) AS nid, labels(n) AS labels, n LIMIT 50
+    RETURN elementId(n) AS nid, labels(n) AS labels, n LIMIT 50
     """
     start_nodes = graph_client.query(resolve_q, {"val": start})
     if not start_nodes:
@@ -391,20 +425,20 @@ def find_paths(start: str, end: str = None, max_len: int = 4, max_paths: int = 2
             cypher = """
             UNWIND $start_ids AS sid
             UNWIND $end_ids AS tid
-            MATCH (s) WHERE id(s)=sid
-            MATCH (t) WHERE id(t)=tid
+            MATCH (s) WHERE elementId(s)=sid
+            MATCH (t) WHERE elementId(t)=tid
             CALL apoc.path.expandConfig(s, {endNodes:[t], maxLevel:$max_len, limit:$max_paths, relationshipFilter:$rel_filter, labelFilter:$label_filter}) YIELD path
-            RETURN [n IN nodes(path) | {id:id(n), labels:labels(n), props:apoc.map.fromPairs([k IN keys(n) | [k, n[k]]])}] AS nodes, [r IN relationships(path) | type(r)] AS rels LIMIT $max_paths
+            RETURN [n IN nodes(path) | {id:elementId(n), labels:labels(n), props:apoc.map.fromPairs([k IN keys(n) | [k, n[k]]])}] AS nodes, [r IN relationships(path) | type(r)] AS rels LIMIT $max_paths
             """
             p_params = {**params, "start_ids": start_ids, "end_ids": end_ids}
         else:
             cypher = """
             UNWIND $start_ids AS sid
             UNWIND $end_ids AS tid
-            MATCH (s) WHERE id(s)=sid
-            MATCH (t) WHERE id(t)=tid
+            MATCH (s) WHERE elementId(s)=sid
+            MATCH (t) WHERE elementId(t)=tid
             MATCH p=(s)-[*..$max_len]-(t)
-            RETURN [n IN nodes(p) | {id:id(n), labels:labels(n), props:apoc.map.fromPairs([k IN keys(n) | [k, n[k]]])}] AS nodes, [r IN relationships(p) | type(r)] AS rels LIMIT $max_paths
+            RETURN [n IN nodes(p) | {id:elementId(n), labels:labels(n), props:apoc.map.fromPairs([k IN keys(n) | [k, n[k]]])}] AS nodes, [r IN relationships(p) | type(r)] AS rels LIMIT $max_paths
             """
             p_params = {**params, "start_ids": start_ids, "end_ids": end_ids}
     else:
@@ -412,18 +446,18 @@ def find_paths(start: str, end: str = None, max_len: int = 4, max_paths: int = 2
         if use_apoc:
             cypher = """
             UNWIND $start_ids AS sid
-            MATCH (s) WHERE id(s)=sid
+            MATCH (s) WHERE elementId(s)=sid
             CALL apoc.path.expandConfig(s, {maxLevel:$max_len, limit:$max_paths, relationshipFilter:$rel_filter, labelFilter:$label_filter}) YIELD path
-            RETURN [n IN nodes(path) | {id:id(n), labels:labels(n), props:apoc.map.fromPairs([k IN keys(n) | [k, n[k]]])}] AS nodes, [r IN relationships(path) | type(r)] AS rels LIMIT $max_paths
+            RETURN [n IN nodes(path) | {id:elementId(n), labels:labels(n), props:apoc.map.fromPairs([k IN keys(n) | [k, n[k]]])}] AS nodes, [r IN relationships(path) | type(r)] AS rels LIMIT $max_paths
             """
             p_params = {**params, "start_ids": start_ids}
         else:
             # Fallback: return 1..max_len hops by progressively collecting neighbors; at minimum return 1-hop info
             cypher = """
             UNWIND $start_ids AS sid
-            MATCH (s) WHERE id(s)=sid
+            MATCH (s) WHERE elementId(s)=sid
             MATCH (s)-[r]-(n)
-            RETURN {start_id:id(s), rel:type(r), neighbor: {id:id(n), labels:labels(n), props:apoc.map.fromPairs([k IN keys(n) | [k, n[k]]])}} AS entry LIMIT $max_paths
+            RETURN {start_id:elementId(s), rel:type(r), neighbor: {id:elementId(n), labels:labels(n), props:apoc.map.fromPairs([k IN keys(n) | [k, n[k]]])}} AS entry LIMIT $max_paths
             """
             p_params = {**params, "start_ids": start_ids}
 

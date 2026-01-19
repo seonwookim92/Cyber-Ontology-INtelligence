@@ -208,8 +208,15 @@ def run_correlation_analysis(
         cache_key = f"{k}_{itype}"
         if cache_key in tg_cache: return tg_cache[cache_key]
         
+        # [변경] 모든 노드 검색 시 ALIASED_AS를 추적하여 canonical 상위 노드를 찾음
         if itype == 'Incident':
-            q_inc = "MATCH (i:Incident) WHERE toLower(i.title) = toLower($val) OR toLower(i.name) = toLower($val) MATCH (i)-[:ATTRIBUTED_TO|ALIASED_AS*0..1]-(tg:ThreatGroup) RETURN tg.name as tgname"
+            q_inc = """
+                MATCH (i:Incident) 
+                WHERE toLower(i.title) = toLower($val) OR toLower(i.name) = toLower($val) 
+                MATCH (i)-[:ATTRIBUTED_TO|ALIASED_AS*0..1]-(canonical)
+                OPTIONAL MATCH (canonical)-[:ALIASED_AS*0..1]-(tg:ThreatGroup)
+                RETURN DISTINCT tg.name as tgname
+            """
             res = graph_client.query(q_inc, {"val": k})
             tgs = [r['tgname'] for r in res if r.get('tgname')]
             tg_cache[cache_key] = tgs
@@ -221,9 +228,15 @@ def run_correlation_analysis(
                OR toLower(n.url) = toLower($val) OR toLower(n.cve_id) = toLower($val) 
                OR toLower(n.title) = toLower($val)
             WITH n LIMIT 5
-            OPTIONAL MATCH (n)-[:ATTRIBUTED_TO|INDICATES|RELATED_TO|USES|ALIASED_AS*1..2]-(tg1:ThreatGroup)
-            OPTIONAL MATCH (n)-[:STARTS_WITH|NEXT|HAS_INDICATOR|USES_MALWARE|EXPLOITS|ALIASED_AS*1..3]-(i:Incident)
+            
+            // n 자체이거나 n의 별칭인 모든 관련 노드 확장
+            OPTIONAL MATCH (n)-[:ALIASED_AS*0..1]-(rel_node)
+            WITH distinct rel_node
+            
+            OPTIONAL MATCH (rel_node)-[:ATTRIBUTED_TO|INDICATES|RELATED_TO|USES|ALIASED_AS*1..2]-(tg1:ThreatGroup)
+            OPTIONAL MATCH (rel_node)-[:STARTS_WITH|NEXT|HAS_INDICATOR|USES_MALWARE|EXPLOITS|ALIASED_AS*1..3]-(i:Incident)
             OPTIONAL MATCH (i)-[:ATTRIBUTED_TO|ALIASED_AS*0..1]-(tg2:ThreatGroup)
+            
             WITH collect(distinct tg1.name) + collect(distinct tg2.name) AS tgs
             UNWIND tgs AS tgname
             RETURN DISTINCT tgname LIMIT 15
@@ -248,15 +261,36 @@ def run_correlation_analysis(
         
         resolved_tgs = []
         if r_type == 'ThreatGroup':
-            resolved_tgs = [label_val]
+            # [추가] 만약 검색된 것이 별칭(Alias) 노드라면 상위 canonical 노드명을 찾아 병합
+            res_canonical = graph_client.query("""
+                MATCH (tg:ThreatGroup {name: $val})
+                OPTIONAL MATCH (tg)-[:ALIASED_AS*1..1]-(canonical:ThreatGroup)
+                RETURN DISTINCT coalesce(canonical.name, tg.name) as name LIMIT 1
+            """, {"val": label_val})
+            if res_canonical:
+                resolved_tgs = [r['name'] for r in res_canonical]
+            else:
+                resolved_tgs = [label_val]
         else:
             resolved_tgs = _find_threatgroups_for_label(label_val, r_type)
 
         for tg_name in resolved_tgs:
             if not tg_name: continue
             if tg_name not in aggregated_tgs:
+                # [추가] 별칭 정보를 함께 가져와서 라벨링
+                res_alias = graph_client.query("""
+                    MATCH (tg:ThreatGroup {name: $val})
+                    OPTIONAL MATCH (tg)-[:ALIASED_AS]-(a)
+                    RETURN collect(distinct a.name) as aliases
+                """, {"val": tg_name})
+                aliases = res_alias[0]['aliases'] if res_alias else []
+                display_label = tg_name
+                if aliases:
+                    display_label += f" (a.k.a {', '.join(aliases)})"
+
                 aggregated_tgs[tg_name] = {
-                    'label': tg_name,
+                    'label': display_label,
+                    'pure_name': tg_name,
                     'min_dist': 999,
                     'paths': [],
                     'input_hits': set(),  # Which of our input artifacts hit this TG

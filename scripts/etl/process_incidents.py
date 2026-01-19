@@ -146,17 +146,17 @@ def ingest_incident(incident: Dict[str, Any]):
             if r_type == "Malware":
                 q_link_mal = """
                 MATCH (s:AttackStep {id: $step_id})
-                MATCH (m:Malware) WHERE toLower(m.name) = toLower($val)
+                MERGE (m:Malware {name: $val})
                 MERGE (s)-[:USES_MALWARE]->(m)
                 """
                 graph_client.query(q_link_mal, {"step_id": step_id, "val": r_val})
 
             elif r_type == "Vulnerability":
-                # CVE-XXXX-XXXX 포맷만 추출 (괄호 뒤 product 제거)
+                # CVE-XXXX-XXXX 포맷만 추출
                 cve_clean = r_val.split(' ')[0]
                 q_link_vuln = """
                 MATCH (s:AttackStep {id: $step_id})
-                MATCH (v:Vulnerability) WHERE v.cve_id = $val
+                MERGE (v:Vulnerability {cve_id: $val})
                 MERGE (s)-[:EXPLOITS]->(v)
                 """
                 graph_client.query(q_link_vuln, {"step_id": step_id, "val": cve_clean})
