@@ -43,72 +43,97 @@ def _apoc_available() -> bool:
 # --------------------------------------------------------------------------
 @tool
 def inspect_schema() -> str:
-    """Returns the current graph schema (Incident -> AttackStep -> Entity)."""
-    return """
-    [Graph Schema]
-    Nodes: (:Incident), (:AttackStep), (:Entity {name, type})
-    Rels: (:Incident)-[:HAS_ATTACK_FLOW]->(:AttackStep)-[:INVOLVES_ENTITY]->(:Entity)
     """
+    Returns a brief overview of the graph schema including labels and relationship types.
+    Use this to understand what kind of nodes and connections exist before writing custom queries or when you need to explore unknown parts of the graph.
+    """
+    try:
+        labels = graph_client.query("CALL db.labels()")
+        rels = graph_client.query("CALL db.relationshipTypes()")
+        
+        # Extract names from records
+        label_list = [list(l.values())[0] for l in labels] if labels else []
+        rel_list = [list(r.values())[0] for r in rels] if rels else []
+        
+        return f"""
+[Graph Schema Overview]
+Available Node Labels: {', '.join(label_list)}
+Available Relationship Types: {', '.join(rel_list)}
+
+Key Node Properties:
+- Incident: title, summary, timestamp
+- AttackStep: phase, description, outcome, order
+- Entity (General): name, original_value, type, description
+- Malware: name, description
+- Vulnerability: cve_id, description
+- ThreatGroup: name, description
+
+Core Ontology Connections:
+- (Incident)-[:HAS_ATTACK_FLOW]->(AttackStep)-[:INVOLVES_ENTITY]->(Entity)
+- (Incident)-[:TARGETS]->(Identity)
+- (AttackStep)-[:USES_MALWARE]->(Malware)
+- (AttackStep)-[:EXPLOITS]->(Vulnerability)
+- (AttackStep)-[:HAS_INDICATOR]->(Indicator)
+- (ThreatGroup)-[:ATTRIBUTED_TO]-(Incident)
+- (ThreatGroup)-[:ALIASED_AS]->(AliasNode)
+        """
+    except Exception as e:
+        return f"Failed to inspect schema: {e}"
 
 @tool
 def search_keyword_context(keyword: str) -> str:
     """
-    Search for a keyword (IP, CVE, Hash) and return its Incident Context.
+    Search for a keyword (IP, CVE, Hash, Name, etc.) across all core labels and return its Incident/Knowledge context.
+    Use this as the primary starting point for any specific entity search.
     """
-    # Strategy: 1) exact equality on name/original_value (fast, reliable for hashes)
-    #           2) contains (case-insensitive)
-    #           3) broader scan across other properties if still not found
-
-    # 1) Exact match
+    # 1) Exact match across common identifying properties
     q_exact = """
-    MATCH (e:Entity)
-    WHERE e.name = $kw OR e.original_value = $kw
-    OPTIONAL MATCH (s:AttackStep)-[:INVOLVES_ENTITY]->(e)
-    OPTIONAL MATCH (i)-[:HAS_ATTACK_FLOW]->(s)
-    OPTIONAL MATCH (s)-[:INVOLVES_ENTITY]->(peer:Entity) WHERE peer <> e
-    RETURN i.title as incident, i.summary as summary, s.phase as phase, s.description as step_desc, e.name as entity_name, e.type as entity_type, collect(distinct peer.name) as related
+    MATCH (n)
+    WHERE n:Entity OR n:ThreatGroup OR n:Malware OR n:Vulnerability OR n:Indicator OR n:Incident
+    WITH n WHERE n.name = $kw OR n.original_value = $kw OR n.cve_id = $kw OR n.title = $kw OR n.id = $kw
+    
+    // 연결된 context 및 별칭 처리
+    OPTIONAL MATCH (n)-[:ALIASED_AS*0..1]-(alias)
+    OPTIONAL MATCH (n)-[:HAS_ATTACK_FLOW|STARTS_WITH|NEXT*0..2]-(step:AttackStep)
+    OPTIONAL MATCH (step)-[:HAS_ATTACK_FLOW|STARTS_WITH|NEXT*0..1]-(i:Incident)
+    
+    RETURN labels(n) as labels, 
+           coalesce(n.name, n.title, n.cve_id, n.original_value) as name,
+           collect(distinct alias.name) as aliases,
+           collect(distinct i.title) as related_incidents
     LIMIT 20
     """
     res = graph_client.query(q_exact, {"kw": keyword})
     if res:
         return json.dumps({"match_type": "exact", "results": res}, ensure_ascii=False, default=str)[:4000]
 
-    # 2) Contains (case-insensitive)
+    # 2) Contains (case-insensitive) fallback
     q_contains = """
-    MATCH (e:Entity)
-    WHERE toLower(e.name) CONTAINS toLower($kw) OR toLower(e.original_value) CONTAINS toLower($kw) OR toLower(e.type) CONTAINS toLower($kw)
-    MATCH (s:AttackStep)-[:INVOLVES_ENTITY]->(e)
-    MATCH (i)-[:HAS_ATTACK_FLOW]->(s)
-    OPTIONAL MATCH (s)-[:INVOLVES_ENTITY]->(peer:Entity) WHERE peer <> e
-    RETURN i.title as incident, s.phase as phase, e.name as entity_name, e.type as entity_type, collect(distinct peer.name) as related
+    MATCH (n)
+    WHERE n:Entity OR n:ThreatGroup OR n:Malware OR n:Vulnerability OR n:Indicator OR n:Incident
+    WITH n WHERE toLower(coalesce(n.name, n.title, n.cve_id, n.original_value, "")) CONTAINS toLower($kw)
+    
+    RETURN labels(n) as labels, 
+           coalesce(n.name, n.title, n.cve_id, n.original_value) as name,
+           n.type as type
     LIMIT 50
     """
     res = graph_client.query(q_contains, {"kw": keyword})
     if res:
         return json.dumps({"match_type": "contains", "results": res}, ensure_ascii=False, default=str)[:4000]
 
-    # 3) Broader scan: search entity-like properties across nodes
-    q_broad = """
-    MATCH (n)
-    WHERE any(k IN keys(n) WHERE toLower(toString(n[k])) CONTAINS toLower($kw))
-    RETURN labels(n) as labels, n as node_props LIMIT 50
-    """
-    res = graph_client.query(q_broad, {"kw": keyword})
-    if res:
-        return json.dumps({"match_type": "broader", "results": res}, ensure_ascii=False, default=str)[:4000]
-
     return "No results found."
 
 @tool
 def search_keyword_from_incidents(keyword: str) -> str:
     """
-    Search for a keyword across Incidents, Victims, and related Entities (Malware, CVE, Indicators).
+    Search for a keyword across Incidents, Victims, and related Entities (ThreatGroups, Malware, CVE, Indicators).
     Returns a list of matching Incidents.
     """
     q = """
-    // 1. 키워드에 매칭되는 시작 노드 찾기 (Incident, Identity, Malware, Vuln, Indicator)
+    // 1. 키워드에 매칭되는 시작 노드 찾기
     MATCH (n)
-    WHERE (n:Incident OR n:Identity OR n:Malware OR n:Vulnerability OR n:Indicator)
+    WHERE (n:Incident OR n:Identity OR n:Malware OR n:Vulnerability OR n:Indicator OR n:ThreatGroup)
       AND (
         toLower(coalesce(n.name, "")) CONTAINS toLower($kw) OR 
         toLower(coalesce(n.title, "")) CONTAINS toLower($kw) OR 
@@ -121,16 +146,15 @@ def search_keyword_from_incidents(keyword: str) -> str:
     // 2. 해당 노드와 연결된 Incident 추적
     MATCH (i:Incident)
     WHERE (i = n)
-       OR (i)-[:TARGETS]->(n)
-       OR (i)-[:STARTS_WITH|NEXT*1..10]->(:AttackStep)-[:USES_MALWARE|EXPLOITS|HAS_INDICATOR]->(n)
+       OR (i)-[:TARGETS|ATTRIBUTED_TO]-(n)
+       OR (i)-[:STARTS_WITH|NEXT|HAS_ATTACK_FLOW*1..10]-(:AttackStep)-[:USES_MALWARE|EXPLOITS|HAS_INDICATOR|INVOLVES_ENTITY]-(n)
     
     OPTIONAL MATCH (i)-[:TARGETS]->(v:Identity)
     
     RETURN DISTINCT i.title as title, 
            i.summary as summary, 
            i.timestamp as date,
-           v.name as victim,
-           v.industry as industry
+           v.name as victim
     ORDER BY i.timestamp DESC
     LIMIT 15
     """
