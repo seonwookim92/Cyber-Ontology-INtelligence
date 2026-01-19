@@ -33,57 +33,101 @@ def _generate_analysis(system_prompt: str, user_prompt: str) -> str:
 # ==============================================================================
 # 1. 목록 조회 서비스 (Selection Helpers)
 # ==============================================================================
-def get_entity_list(entity_type: str, limit: int = 50) -> List[Dict[str, str]]:
+def get_entity_list(entity_type: str, limit: int = 100, search_query: str = None) -> List[Dict[str, str]]:
     """
-    선택창(SelectBox)에 띄울 엔티티 목록을 가져옵니다.
+    선택창(SelectBox)에 띄울 엔티티 목록을 가져옵니다. (연관도 순 정렬)
     """
-    if entity_type == "Incident":
-        # 생성된 사건 목록 (최신순)
-        q = f"""
-        MATCH (n:Incident)
-        OPTIONAL MATCH (n)-[:TARGETS]->(v:Identity)
-        RETURN n.id as uri, 
-               '[' + substring(n.timestamp, 0, 10) + '] ' + n.title + ' (' + coalesce(v.name, 'Unknown') + ')' as label
-        ORDER BY n.timestamp DESC LIMIT {limit}
-        """
-        
-    elif entity_type == "Threat Group":
-        # 위협 그룹 목록
-        q = f"""
-        MATCH (n:ThreatGroup)
-        WHERE n.name IS NOT NULL
-        RETURN n.mitre_id as uri, n.name as label
-        ORDER BY n.name ASC LIMIT {limit}
-        """
-        
-    elif entity_type == "Malware":
-        # 많이 사용되는 악성코드 순
-        q = f"""
-        MATCH (n:Malware)
-        OPTIONAL MATCH (n)-[:USES]->(t:AttackTechnique)
-        RETURN n.name as uri, n.name as label
-        ORDER BY n.name ASC LIMIT {limit}
-        """
-        
-    elif entity_type == "Vulnerability":
-        # 최신 취약점 순
-        q = f"""
-        MATCH (n:Vulnerability)
-        RETURN n.cve_id as uri, n.cve_id + ' (' + coalesce(n.product, 'Unknown') + ')' as label
-        ORDER BY n.date_added DESC LIMIT {limit}
-        """
-    else:
-        return []
-
-    results = graph_client.query(q)
+    params = {"limit": limit, "query": search_query.lower() if search_query else ""}
     
-    # UI 포맷 매핑
+    # 기본 필터링 및 점수 계산 로직
+    if search_query:
+        # 검색어가 있을 경우 SQL의 LIKE/CONTAINS와 유사하게 필터링
+        sq = search_query.lower()
+        
+        # Incident의 경우 태그 클릭 시 [2024-01-01] Title... 형태이므로 전처리 필요
+        if entity_type == "Incident" and sq.startswith("[") and "]" in sq:
+            try:
+                sq = sq.split("]", 1)[1].split("(", 1)[0].strip()
+            except:
+                pass
+        
+        params["query"] = sq # 필터링에 사용할 정제된 검색어
+        
+        if entity_type == "Incident":
+            q = """
+            MATCH (n:Incident)
+            WHERE toLower(n.title) CONTAINS $query OR toLower(n.summary) CONTAINS $query
+            OPTIONAL MATCH (n)-[:TARGETS]->(v:Identity)
+            WITH n, v,
+                 CASE 
+                   WHEN toLower(n.title) = $query THEN 100
+                   WHEN toLower(n.title) CONTAINS $query THEN 50
+                   ELSE 20
+                 END as score
+            RETURN n.id as uri, 
+                   '[' + substring(n.timestamp, 0, 10) + '] ' + n.title + ' (' + coalesce(v.name, 'Unknown') + ')' as label
+            ORDER BY score DESC, n.timestamp DESC LIMIT $limit
+            """
+        elif entity_type == "Threat Group":
+            q = """
+            MATCH (n:ThreatGroup)
+            WHERE toLower(n.name) CONTAINS $query OR toLower(n.description) CONTAINS $query
+            WITH n,
+                 CASE 
+                   WHEN toLower(n.name) = $query THEN 100
+                   WHEN toLower(n.name) STARTS WITH $query THEN 50
+                   ELSE 20
+                 END as score
+            RETURN n.mitre_id as uri, n.name as label
+            ORDER BY score DESC, n.name ASC LIMIT $limit
+            """
+        elif entity_type == "Malware":
+            q = """
+            MATCH (n:Malware)
+            WHERE toLower(n.name) CONTAINS $query
+            WITH n,
+                 CASE 
+                   WHEN toLower(n.name) = $query THEN 100
+                   WHEN toLower(n.name) STARTS WITH $query THEN 50
+                   ELSE 20
+                 END as score
+            RETURN n.name as uri, n.name as label
+            ORDER BY score DESC, n.name ASC LIMIT $limit
+            """
+        elif entity_type == "Vulnerability":
+            q = """
+            MATCH (n:Vulnerability)
+            WHERE toLower(n.cve_id) CONTAINS $query OR toLower(n.description) CONTAINS $query
+            WITH n,
+                 CASE 
+                   WHEN toLower(n.cve_id) = $query THEN 100
+                   WHEN toLower(n.cve_id) STARTS WITH $query THEN 50
+                   ELSE 20
+                 END as score
+            RETURN n.cve_id as uri, n.cve_id + ' (' + coalesce(n.product, 'Unknown') + ')' as label
+            ORDER BY score DESC, n.date_added DESC LIMIT $limit
+            """
+    else:
+        # 검색어 없는 경우 기존 최신/이름순 정렬
+        if entity_type == "Incident":
+            q = "MATCH (n:Incident) OPTIONAL MATCH (n)-[:TARGETS]->(v:Identity) RETURN n.id as uri, '[' + substring(n.timestamp, 0, 10) + '] ' + n.title + ' (' + coalesce(v.name, 'Unknown') + ')' as label ORDER BY n.timestamp DESC LIMIT $limit"
+        elif entity_type == "Threat Group":
+            q = "MATCH (n:ThreatGroup) WHERE n.name IS NOT NULL RETURN n.mitre_id as uri, n.name as label ORDER BY n.name ASC LIMIT $limit"
+        elif entity_type == "Malware":
+            q = "MATCH (n:Malware) RETURN n.name as uri, n.name as label ORDER BY n.name ASC LIMIT $limit"
+        elif entity_type == "Vulnerability":
+            q = "MATCH (n:Vulnerability) RETURN n.cve_id as uri, n.cve_id + ' (' + coalesce(n.product, 'Unknown') + ')' as label ORDER BY n.date_added DESC LIMIT $limit"
+        else:
+            return []
+
+    results = graph_client.query(q, params)
+    
     processed = []
     for r in results:
         processed.append({
-            "uri": r.get("uri"),      # ID (Incident ID, CVE ID, Name...)
-            "label": r.get("label"),  # UI 표시용 텍스트
-            "uri_short": r.get("uri") # 괄호 안에 보여줄 짧은 ID
+            "uri": r.get("uri"),
+            "label": r.get("label"),
+            "uri_short": r.get("uri")
         })
     return processed
 
